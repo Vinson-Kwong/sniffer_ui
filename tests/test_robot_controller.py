@@ -132,6 +132,25 @@ def test_program_present_sync_false_on_error():
     assert _make(ErrSession()).program_present_sync() is False
 
 
+def test_program_present_sync_uses_given_path():
+    s = FakeSession()
+    s.queue_run(0)
+    c = _make(s)
+    assert c.program_present_sync("/opt/foo/run") is True
+    assert any("/opt/foo/run" in cmd for cmd in s.run_calls)
+
+
+def test_binary_path_from_command():
+    from core.robot_controller import binary_path_from_command
+    assert binary_path_from_command("sudo ~/ats/sniffer --bin") == "~/ats/sniffer"
+    assert binary_path_from_command("sudo -E ~/ats/sniffer --bin") == "~/ats/sniffer"
+    assert binary_path_from_command("~/ats/sniffer") == "~/ats/sniffer"
+    assert binary_path_from_command("sudo /opt/foo/run") == "/opt/foo/run"
+    assert binary_path_from_command("ls -la") is None
+    assert binary_path_from_command("sudo systemctl status x") is None
+    assert binary_path_from_command("") is None
+
+
 
 def _capture_threads(monkeypatch):
     """Replace threading.Thread with a recording subclass so tests can join workers

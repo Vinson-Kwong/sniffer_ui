@@ -31,6 +31,24 @@ def build_decompress_command(remote_archive_path: str):
     return None
 
 
+def binary_path_from_command(command: str):
+    """Best-effort: the binary path in a run command, for a pre-flight existence check.
+
+    Skips a leading `sudo` and its dash-options, then returns the first remaining
+    token if it looks like a path (contains '/'). Returns None for PATH commands
+    (e.g. `ls`, `systemctl`) or unparseable input, so the caller can skip the check.
+    """
+    tokens = (command or "").strip().split()
+    i = 0
+    if i < len(tokens) and tokens[i] == "sudo":
+        i += 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            i += 1
+    if i < len(tokens) and "/" in tokens[i]:
+        return tokens[i]
+    return None
+
+
 class RobotController:
     def __init__(self, session, schedule, log, sudo_password=None):
         self._session = session
@@ -62,10 +80,10 @@ class RobotController:
         self._log(f"[已连接] {user}@{host}:{port}\n")
         return self._check_program()
 
-    def program_present_sync(self):
-        """Quick pre-flight: is ~/ats/sniffer present? Used before running."""
+    def program_present_sync(self, path=PROGRAM_PATH):
+        """Quick pre-flight: is the binary at `path` present? Used before running."""
         try:
-            code, _out, _err = self._session.run(f"test -f {PROGRAM_PATH}")
+            code, _out, _err = self._session.run(f"test -f {path}")
         except Exception as e:
             self._log(f"[检查程序异常] {e}\n")
             return False

@@ -25,11 +25,13 @@ class ProgramRunner:
     def is_running(self) -> bool:
         return self._running
 
-    def start(self) -> None:
+    def start(self, command=None) -> None:
         with self._lock:
             if self._running:
                 return
             self._channel = self._session.open_shell()
+            cmd = command if command else RUN_COMMAND
+            self._command = cmd if cmd.endswith("\n") else cmd + "\n"
             self._sudo_sent = False
             self._ended = False
             self._command_sent = False
@@ -92,11 +94,11 @@ class ProgramRunner:
                 if not self._command_sent:
                     self._command_sent = True
                     try:
-                        chan.send(RUN_COMMAND.encode("utf-8"))
+                        chan.send(self._command.encode("utf-8"))
                     except Exception as e:
                         self._on_output(f"[运行] 发送命令失败: {type(e).__name__}: {e}\n")
                     else:
-                        self._on_output("[运行] 已发送: sudo ~/ats/sniffer --bin\n")
+                        self._on_output(f"[运行] 已发送: {self._command.strip()}\n")
                 # feed the sudo password when prompted
                 if not self._sudo_sent and "password" in buf.lower():
                     try:

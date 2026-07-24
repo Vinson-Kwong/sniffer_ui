@@ -68,6 +68,16 @@ def test_read_loop_logs_exception_reason():
     assert "pipe broken" in joined
 
 
+def test_start_uses_custom_command():
+    chan = FakeChannel([b"output\n"])
+    session = FakeSession()
+    session.shell = chan
+    runner = ProgramRunner(session, on_output=lambda s: None, on_ended=lambda: None)
+    runner.start("sudo /opt/foo/run --x")
+    _wait(runner)
+    assert b"sudo /opt/foo/run --x\n" in chan.sent
+
+
 def test_read_loop_strips_ansi_from_output():
     # The sniffer emits color codes via the PTY; they must not leak into the log.
     chan = FakeChannel([b"\x1b[1;34mcreated file\x1b[0m\n"])

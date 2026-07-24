@@ -10,7 +10,7 @@ from tkinter import filedialog
 from config_store import load_config, save_config
 from core.net_info import list_local_ipv4
 from core.ssh_session import SSHSession
-from core.robot_controller import RobotController
+from core.robot_controller import RobotController, binary_path_from_command
 from core.program_runner import ProgramRunner
 from ui.log_view import LogView
 
@@ -83,7 +83,7 @@ class App(ctk.CTk):
         self.status_label.pack(side="left", padx=12)
 
         deploy = ctk.CTkFrame(self); deploy.pack(fill="x", padx=12, pady=6)
-        ctk.CTkLabel(deploy, text="部署", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
+        ctk.CTkLabel(deploy, text="程序部署", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
         d1 = ctk.CTkFrame(deploy, fg_color="transparent"); d1.pack(fill="x", **pad)
         self.archive_entry = ctk.CTkEntry(d1, width=360); self.archive_entry.pack(side="left")
         ctk.CTkButton(d1, text="浏览", width=70, command=self.on_browse).pack(side="left", padx=8)
@@ -97,6 +97,10 @@ class App(ctk.CTk):
 
         runf = ctk.CTkFrame(self); runf.pack(fill="x", padx=12, pady=6)
         ctk.CTkLabel(runf, text="运行", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
+        rf_cmd = ctk.CTkFrame(runf, fg_color="transparent"); rf_cmd.pack(fill="x", **pad)
+        ctk.CTkLabel(rf_cmd, text="运行命令:").pack(side="left")
+        self.run_cmd_entry = ctk.CTkEntry(rf_cmd)
+        self.run_cmd_entry.pack(side="left", padx=8, fill="x", expand=True)
         rf1 = ctk.CTkFrame(runf, fg_color="transparent"); rf1.pack(fill="x", **pad)
         self.run_btn = ctk.CTkButton(rf1, text="运行", width=120, command=self.on_run_toggle)
         self.run_btn.pack(side="left")
@@ -142,6 +146,7 @@ class App(ctk.CTk):
         self.user_entry.insert(0, cfg.get("username", "robot"))
         self.pw_entry.insert(0, cfg.get("password", "MangoTango"))
         self._last_dir = cfg.get("last_archive_dir", "")
+        self.run_cmd_entry.insert(0, cfg.get("run_command", "sudo ~/ats/sniffer --bin"))
         self._refresh_local_ips(initial=cfg.get("local_ip", ""))
 
     def _refresh_local_ips(self, initial=""):
@@ -177,6 +182,7 @@ class App(ctk.CTk):
                 "username": self.user_entry.get(),
                 "password": self.pw_entry.get(),
                 "last_archive_dir": self._last_dir,
+                "run_command": self.run_cmd_entry.get(),
             })
         except Exception as e:
             self._log(f"[保存配置失败] {e}\n")
@@ -266,15 +272,19 @@ class App(ctk.CTk):
             return
         if not self.session.connected:
             self._log("[运行] 请先连接目标\n"); return
+        command = self.run_cmd_entry.get().strip()
+        if not command:
+            self._log("[运行] 运行命令为空\n"); return
         self.run_btn.configure(state="disabled")
 
         def work():
             try:
-                if not self.controller.program_present_sync():
-                    self._log("[运行失败] ~/ats/sniffer 不存在，请先上传并解压部署\n")
+                binary = binary_path_from_command(command)
+                if binary and not self.controller.program_present_sync(binary):
+                    self._log(f"[运行失败] {binary} 不存在，请先上传并解压部署\n")
                     self._schedule(self._refresh_controls)
                     return
-                self.runner.start()
+                self.runner.start(command)
             except Exception as e:
                 self._log(f"[运行失败] {e}\n")
                 self._schedule(self._refresh_controls)
@@ -285,7 +295,7 @@ class App(ctk.CTk):
             # a broken binary exits almost immediately and reverts the button.
             time.sleep(1.2)
             if self.runner.is_running:
-                self._log("[运行成功] sudo ~/ats/sniffer --bin 已启动\n")
+                self._log(f"[运行成功] {command} 已启动\n")
             else:
                 self._log("[运行失败] 程序启动后立即退出，请查看上方输出\n")
             self._schedule(self._refresh_controls)
