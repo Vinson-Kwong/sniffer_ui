@@ -89,8 +89,11 @@ class App(ctk.CTk):
         ctk.CTkButton(d1, text="浏览", width=70, command=self.on_browse).pack(side="left", padx=8)
         self.upload_btn = ctk.CTkButton(d1, text="上传并解压", width=120, command=self.on_upload)
         self.upload_btn.pack(side="left", padx=8)
-        self.check_label = ctk.CTkLabel(deploy, text="程序检查 ~/ats/sniffer: ❓ 未知")
-        self.check_label.pack(anchor="w", padx=8, pady=(2, 6))
+        chk = ctk.CTkFrame(deploy, fg_color="transparent"); chk.pack(fill="x", padx=8, pady=(2, 6))
+        self.check_label = ctk.CTkLabel(chk, text="程序检查 ~/ats/sniffer: ❓ 未知")
+        self.check_label.pack(side="left")
+        ctk.CTkButton(chk, text="↻", width=36, command=self.on_refresh_check,
+                      font=ctk.CTkFont(size=16)).pack(side="left", padx=8)
 
         runf = ctk.CTkFrame(self); runf.pack(fill="x", padx=12, pady=6)
         ctk.CTkLabel(runf, text="运行", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
@@ -153,6 +156,17 @@ class App(ctk.CTk):
         # keep the current selection if it is still present after re-scan
         self._refresh_local_ips(initial=self.local_ip_var.get())
         self._log(f"[本地IP] 已刷新: {', '.join(list_local_ipv4() or ['未检测到'])}\n")
+
+    def on_refresh_check(self):
+        if not self.session.connected:
+            self._log("[检查] 请先连接目标\n"); return
+
+        def work():
+            present = self.controller.program_present_sync()
+            self._log(f"[检查] ~/ats/sniffer {'已存在' if present else '不存在'}\n")
+            self._schedule(lambda: self._set_check(present))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _persist_config(self):
         try:
