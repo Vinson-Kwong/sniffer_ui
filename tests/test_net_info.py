@@ -1,41 +1,55 @@
 import socket
+from types import SimpleNamespace
 
 import core.net_info as net_info
 
 
-def test_excludes_loopback_and_dedupes(monkeypatch):
-    def fake_byname_ex(host):
-        return (host, [], ["192.168.1.10", "192.168.1.10", "10.0.0.7"])
+def _fake_psutil(adapters):
+    """adapters: {name: (isup, [ipv4,...])}"""
+    stats = {name: SimpleNamespace(isup=up) for name, (up, _) in adapters.items()}
+    addrs = {
+        name: [SimpleNamespace(family=socket.AF_INET, address=ip) for ip in ips]
+        for name, (_, ips) in adapters.items()
+    }
+    return SimpleNamespace(net_if_stats=lambda: stats, net_if_addrs=lambda: addrs)
 
-    def fake_gethostname():
-        return "myhost"
+
+def test_psutil_path_skips_down_loopback_and_linklocal(monkeypatch):
+    monkeypatch.setattr(net_info, "psutil", _fake_psutil({
+        "eth": (True, ["192.168.1.20", "192.168.1.20", "169.254.1.1"]),  # dup + link-local
+        "wifi": (False, ["192.168.1.50"]),   # disabled -> excluded
+        "lo": (True, ["127.0.0.1"]),         # loopback -> excluded
+    }))
+    assert net_info.list_local_ipv4() == ["192.168.1.20"]
+
+
+def test_psutil_path_lists_multiple_up_adapters(monkeypatch):
+    monkeypatch.setattr(net_info, "psutil", _fake_psutil({
+        "eth": (True, ["192.168.1.20"]),
+        "vnic": (True, ["172.24.48.1"]),
+    }))
+    assert set(net_info.list_local_ipv4()) == {"192.168.1.20", "172.24.48.1"}
+
+
+def test_fallback_udp_probe_when_psutil_missing(monkeypatch):
+    monkeypatch.setattr(net_info, "psutil", None)
 
     class FakeSock:
         def connect(self, *a, **k):
             pass
 
         def getsockname(self):
-            return ("192.168.1.10", 0)
+            return ("10.0.0.9", 0)
 
         def close(self):
             pass
 
-    monkeypatch.setattr(socket, "gethostbyname_ex", fake_byname_ex)
-    monkeypatch.setattr(socket, "gethostname", fake_gethostname)
     monkeypatch.setattr(socket, "socket", lambda *a, **k: FakeSock())
-
-    addrs = net_info.list_local_ipv4()
-    assert addrs[0] == "192.168.1.10"        # primary outbound IP first
-    assert "10.0.0.7" in addrs
-    assert "127.0.0.1" not in addrs
-    assert len(addrs) == len(set(addrs))     # de-duplicated
+    assert net_info.list_local_ipv4() == ["10.0.0.9"]
 
 
-def test_returns_empty_when_host_resolution_fails(monkeypatch):
-    def raise_gaierror(*a, **k):
-        raise socket.gaierror("nope")
-
-    monkeypatch.setattr(socket, "gethostbyname_ex", raise_gaierror)
+def test_fallback_empty_when_no_route(monkeypatch):
+    monkeypatch.setattr(net_info, "psutil", None)
 
     class FakeSock:
         def connect(self, *a, **k):
