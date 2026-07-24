@@ -109,11 +109,20 @@ class App(ctk.CTk):
         self._queue.put(fn)
 
     def _poll(self):
-        try:
-            while True:
-                self._queue.get_nowait()()
-        except queue.Empty:
-            pass
+        while True:
+            try:
+                fn = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                fn()
+            except Exception as e:
+                # Isolate each callback so one failure can never kill the poll loop
+                # (which would freeze the whole UI). Surface it in the log instead.
+                try:
+                    self.log_view.append(f"[内部错误] {e}\n")
+                except Exception:
+                    pass
         self.after(100, self._poll)
 
     def _log(self, text: str):
