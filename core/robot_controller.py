@@ -97,3 +97,21 @@ class RobotController:
                 self._log(f"[上传/解压失败] {e}\n")
                 self._schedule(lambda: on_done(ok=False, error=str(e)))
         threading.Thread(target=work, daemon=True).start()
+
+    # ---- delete ----
+    def _delete_sync(self):
+        code, _out, err = self._session.run(f"rm -f {PROGRAM_PATH}")
+        if code != 0:
+            raise RuntimeError(f"删除失败 exit={code} {err.strip()}")
+        self._log("[已删除] ~/ats/sniffer\n")
+        return self._check_program()
+
+    def delete_program(self, on_done):
+        def work():
+            try:
+                present = self._delete_sync()
+                self._schedule(lambda: on_done(ok=True, error=None, present=present))
+            except Exception as e:
+                self._log(f"[删除失败] {e}\n")
+                self._schedule(lambda: on_done(ok=False, error=str(e)))
+        threading.Thread(target=work, daemon=True).start()

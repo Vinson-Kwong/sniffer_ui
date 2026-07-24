@@ -88,3 +88,24 @@ def test_upload_sync_decompress_failure_raises(tmp_path):
         assert False, "expected raise"
     except RuntimeError:
         pass
+
+
+def test_delete_sync_removes_and_rechecks():
+    s = FakeSession()
+    s.queue_run(0, "")               # rm
+    s.queue_run(0, "__MISSING__\n")  # presence re-check
+    c = _make(s)
+    present = c._delete_sync()
+    assert present is False
+    assert any("rm -f ~/ats/sniffer" in cmd for cmd in s.run_calls)
+
+
+def test_delete_sync_failure_raises():
+    s = FakeSession()
+    s.queue_run(1, "", "permission denied")
+    c = _make(s)
+    try:
+        c._delete_sync()
+        assert False, "expected raise"
+    except RuntimeError:
+        pass
