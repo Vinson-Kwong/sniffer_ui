@@ -68,8 +68,9 @@ class RobotController:
                 present = self._connect_sync(host, port, user, password)
                 self._schedule(lambda: on_done(connected=True, present=present, error=None))
             except Exception as e:
+                msg = str(e)  # bind before the lambda: the except target `e` is cleared on block exit (PEP 3110)
                 self._log(f"[连接失败] {e}\n")
-                self._schedule(lambda: on_done(connected=False, present=None, error=str(e)))
+                self._schedule(lambda: on_done(connected=False, present=None, error=msg))
         threading.Thread(target=work, daemon=True).start()
 
     # ---- upload + decompress ----
@@ -94,8 +95,9 @@ class RobotController:
                 present = self._upload_sync(local_path)
                 self._schedule(lambda: on_done(ok=True, error=None, present=present))
             except Exception as e:
+                msg = str(e)  # bind before the lambda (except target is cleared on block exit)
                 self._log(f"[上传/解压失败] {e}\n")
-                self._schedule(lambda: on_done(ok=False, error=str(e)))
+                self._schedule(lambda: on_done(ok=False, error=msg))
         threading.Thread(target=work, daemon=True).start()
 
     # ---- delete ----
@@ -112,6 +114,7 @@ class RobotController:
                 present = self._delete_sync()
                 self._schedule(lambda: on_done(ok=True, error=None, present=present))
             except Exception as e:
+                msg = str(e)  # bind before the lambda (except target is cleared on block exit)
                 self._log(f"[删除失败] {e}\n")
-                self._schedule(lambda: on_done(ok=False, error=str(e)))
+                self._schedule(lambda: on_done(ok=False, error=msg))
         threading.Thread(target=work, daemon=True).start()

@@ -1,3 +1,5 @@
+import threading
+
 from core.robot_controller import (
     PROGRAM_CHECK_COMMAND,
     build_decompress_command,
@@ -109,3 +111,73 @@ def test_delete_sync_failure_raises():
         assert False, "expected raise"
     except RuntimeError:
         pass
+
+
+def _capture_threads(monkeypatch):
+    """Replace threading.Thread with a recording subclass so tests can join workers
+    before draining the deferred callback queue (reproduces the real UI timing where
+    the except block has already exited and the exception variable has been cleared)."""
+    created = []
+
+    class RecordingThread(threading.Thread):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            created.append(self)
+
+    monkeypatch.setattr(threading, "Thread", RecordingThread)
+    return created
+
+
+def test_connect_failure_callback_survives_except_exit(monkeypatch):
+    created = _capture_threads(monkeypatch)
+    pending, results = [], []
+
+    class BoomSession(FakeSession):
+        def connect(self, *a, **k):
+            raise OSError("boom")
+
+    c = RobotController(BoomSession(), schedule=pending.append, log=lambda s: None)
+    c.connect_and_check("1.2.3.4", 22, "u", "p", lambda **kw: results.append(kw))
+    for t in created:
+        t.join(timeout=2)
+    for fn in pending:  # drained AFTER except block exited -> `e` already cleared
+        fn()
+
+    assert results == [{"connected": False, "present": None, "error": "boom"}]
+
+
+def test_upload_failure_callback_survives_except_exit(monkeypatch, tmp_path):
+    created = _capture_threads(monkeypatch)
+    pending, results = [], []
+
+    c = RobotController(FakeSession(), schedule=pending.append, log=lambda s: None)
+    bad = tmp_path / "pkg.bin"
+    bad.write_bytes(b"x")
+    c.upload_and_decompress(str(bad), lambda **kw: results.append(kw))
+    for t in created:
+        t.join(timeout=2)
+    for fn in pending:
+        fn()
+
+    assert len(results) == 1
+    assert results[0]["ok"] is False
+    assert "不支持的压缩格式" in results[0]["error"]
+
+
+def test_delete_failure_callback_survives_except_exit(monkeypatch):
+    created = _capture_threads(monkeypatch)
+    pending, results = [], []
+
+    s = FakeSession()
+    s.queue_run(1, "", "denied")
+    c = RobotController(s, schedule=pending.append, log=lambda s: None)
+    c.delete_program(lambda **kw: results.append(kw))
+    for t in created:
+        t.join(timeout=2)
+    for fn in pending:
+        fn()
+
+    assert len(results) == 1
+    assert results[0]["ok"] is False
+    assert "删除失败" in results[0]["error"]
+
