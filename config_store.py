@@ -1,5 +1,6 @@
 """Persisted application parameters (config.json next to the executable)."""
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -22,6 +23,54 @@ def config_path() -> Path:
     else:
         base = Path(__file__).resolve().parent
     return base / "config.json"
+
+
+def default_config_path() -> Path:
+    """default_config.json lives next to the exe/script (the 'factory defaults')."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent
+    return base / "default_config.json"
+
+
+def _bundled_default_path() -> Path:
+    """In a frozen build, the bundled default_config.json lives under _MEIPASS."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "default_config.json"
+    return Path(__file__).resolve().parent / "default_config.json"
+
+
+def ensure_default_config_file(default_path: Optional[Path] = None,
+                               bundled_path: Optional[Path] = None) -> None:
+    """Make sure default_config.json exists next to the exe/script so it is editable.
+
+    Copies it from the bundled resource (frozen build) or writes DEFAULTS."""
+    p = default_path or default_config_path()
+    if p.exists():
+        return
+    src = bundled_path or _bundled_default_path()
+    if src.exists():
+        try:
+            shutil.copyfile(src, p)
+            return
+        except OSError:
+            pass
+    save_config(DEFAULTS, p)
+
+
+def restore_defaults(default_file: Optional[Path] = None,
+                     config_file: Optional[Path] = None) -> dict:
+    """Copy default_config.json -> config.json and return the loaded config."""
+    ensure_default_config_file(default_path=default_file)
+    src = default_file or default_config_path()
+    dst = config_file or config_path()
+    try:
+        shutil.copyfile(src, dst)
+    except OSError:
+        save_config(DEFAULTS, dst)
+    return load_config(dst)
 
 
 def load_config(path: Optional[Path] = None) -> dict:

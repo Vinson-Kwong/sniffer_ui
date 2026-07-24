@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 datas = []
 datas += collect_data_files("customtkinter")
+datas += [("default_config.json", ".")]  # materialized next to the exe on first run
 
 block_cipher = None
 

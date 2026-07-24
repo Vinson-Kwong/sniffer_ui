@@ -7,7 +7,7 @@ import time
 import customtkinter as ctk
 from tkinter import filedialog
 
-from config_store import load_config, save_config
+from config_store import ensure_default_config_file, load_config, restore_defaults, save_config
 from core.net_info import list_local_ipv4
 from core.ssh_session import SSHSession
 from core.robot_controller import RobotController, binary_path_from_command
@@ -44,6 +44,7 @@ class App(ctk.CTk):
         )
 
         self._build_ui()
+        ensure_default_config_file()
         self._load_config_into_ui()
         self.after(100, self._poll)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -81,6 +82,9 @@ class App(ctk.CTk):
         self.connect_btn.pack(side="left", padx=(16, 0))
         self.status_label = ctk.CTkLabel(r3, text="● 未连接", text_color="#e07b7b")
         self.status_label.pack(side="left", padx=12)
+
+        r4 = ctk.CTkFrame(conn, fg_color="transparent"); r4.pack(fill="x", **pad)
+        ctk.CTkButton(r4, text="恢复默认配置", width=120, command=self.on_restore_defaults).pack(side="right")
 
         deploy = ctk.CTkFrame(self); deploy.pack(fill="x", padx=12, pady=6)
         ctk.CTkLabel(deploy, text="程序部署", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
@@ -141,8 +145,11 @@ class App(ctk.CTk):
     # ---------------- config ----------------
     def _load_config_into_ui(self):
         cfg = load_config()
+        for entry in (self.target_entry, self.port_entry, self.user_entry,
+                      self.pw_entry, self.run_cmd_entry):
+            entry.delete(0, "end")
         self.target_entry.insert(0, cfg.get("target_ip", "192.168.1.111"))
-        self.port_entry.delete(0, "end"); self.port_entry.insert(0, str(cfg.get("port", 22)))
+        self.port_entry.insert(0, str(cfg.get("port", 22)))
         self.user_entry.insert(0, cfg.get("username", "robot"))
         self.pw_entry.insert(0, cfg.get("password", "MangoTango"))
         self._last_dir = cfg.get("last_archive_dir", "")
@@ -172,6 +179,26 @@ class App(ctk.CTk):
             self._schedule(lambda: self._set_check(present))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def on_restore_defaults(self):
+        # Copy default_config.json -> config.json, then reload fields.
+        restore_defaults()
+        # config changed -> drop any connection that is now to a stale target
+        try:
+            if self.runner.is_running:
+                self.runner.stop()
+        except Exception:
+            pass
+        try:
+            self.session.close()
+        except Exception:
+            pass
+        self._connected = False
+        self._set_status(False)
+        self._set_check(None)
+        self._load_config_into_ui()
+        self._refresh_controls()
+        self._log("[配置] 已恢复默认配置，请重新连接\n")
 
     def _persist_config(self):
         try:

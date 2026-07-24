@@ -1,0 +1,9 @@
+{
+  "local_ip": "",
+  "target_ip": "192.168.1.111",
+  "port": 22,
+  "username": "robot",
+  "password": "MangoTango",
+  "last_archive_dir": "",
+  "run_command": "sudo ~/ats/sniffer --bin"
+}
