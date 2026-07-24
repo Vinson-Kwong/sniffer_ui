@@ -77,7 +77,7 @@ class SSHSession:
         if self._client is None:
             raise RuntimeError("not connected")
         chan = self._client.invoke_shell()
-        chan.settimeout(0.0)  # non-blocking recv for the reader loop
+        chan.settimeout(1.0)  # paced recv: the reader retries on socket.timeout
         return chan
 
     def close(self) -> None:

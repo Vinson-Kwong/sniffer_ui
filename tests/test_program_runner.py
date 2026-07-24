@@ -68,6 +68,53 @@ def test_read_loop_logs_exception_reason():
     assert "pipe broken" in joined
 
 
+def test_read_loop_survives_recv_timeouts():
+    # A non-blocking/paced socket raises socket.timeout when no data has arrived
+    # YET. The reader must retry, not treat it as a fatal error and exit.
+    import socket
+
+    class TimeoutyChannel:
+        def __init__(self):
+            self.sent = []
+            self._n = 0
+            self.closed = False
+
+        def recv(self, n):
+            self._n += 1
+            if self._n <= 3:
+                raise socket.timeout("no data yet")
+            if self._n == 4:
+                return b"sniffer running\n"
+            return b""
+
+        def send(self, d):
+            if isinstance(d, str):
+                d = d.encode()
+            self.sent.append(d)
+            return len(d)
+
+        def send_ready(self):
+            return True
+
+        def exit_status_ready(self):
+            return False
+
+        def close(self):
+            self.closed = True
+
+    session = FakeSession()
+    session.shell = TimeoutyChannel()
+    outputs = []
+    runner = ProgramRunner(session, on_output=outputs.append, on_ended=lambda: None)
+    runner.start()
+    _wait(runner)
+    joined = "".join(outputs)
+    assert "sniffer running\n" in joined          # survived the timeouts, got data
+    assert "通道异常" not in joined                # timeout is not an error
+    assert RUN_COMMAND.encode() in session.shell.sent
+
+
+
 
 def test_stop_resets_state_and_ends_session_for_live_shell():
     # A live interactive shell (what invoke_shell actually is) does NOT EOF when

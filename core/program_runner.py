@@ -1,4 +1,5 @@
 """Long-lived interactive shell for `sudo ~/ats/sniffer --bin`; stop = Ctrl+C (\\x03)."""
+import socket
 import threading
 
 RUN_COMMAND = "sudo ~/ats/sniffer --bin\n"
@@ -73,6 +74,10 @@ class ProgramRunner:
             while True:
                 try:
                     data = chan.recv(4096)
+                except socket.timeout:
+                    # Paced/non-blocking socket: no data arrived YET. Retry,
+                    # do NOT exit (this was causing a false "immediate exit").
+                    continue
                 except Exception as e:
                     self._on_output(f"[运行] 通道异常: {type(e).__name__}: {e}\n")
                     break
