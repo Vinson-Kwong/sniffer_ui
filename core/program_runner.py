@@ -1,0 +1,61 @@
+"""Long-lived interactive shell for `sudo ~/ats/sniffer --bin`; stop = Ctrl+C (\\x03)."""
+import threading
+
+RUN_COMMAND = "sudo ~/ats/sniffer --bin\n"
+CTRL_C = b"\x03"
+
+
+class ProgramRunner:
+    def __init__(self, session, on_output, on_ended, sudo_password=""):
+        self._session = session
+        self._on_output = on_output
+        self._on_ended = on_ended
+        self._sudo_password = sudo_password if isinstance(sudo_password, str) else ""
+        self._channel = None
+        self._thread = None
+        self._running = False
+        self._lock = threading.Lock()
+        self._sudo_sent = False
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def start(self) -> None:
+        with self._lock:
+            if self._running:
+                return
+            self._channel = self._session.open_shell()
+            self._sudo_sent = False
+            self._running = True
+            self._thread = threading.Thread(target=self._read_loop, daemon=True)
+            self._thread.start()
+            self._channel.send(RUN_COMMAND.encode("utf-8"))
+
+    def stop(self) -> None:
+        with self._lock:
+            if not self._running or self._channel is None:
+                return
+            self._channel.send(CTRL_C)
+
+    def _read_loop(self) -> None:
+        chan = self._channel
+        buf = ""
+        try:
+            while True:
+                try:
+                    data = chan.recv(4096)
+                except Exception:
+                    break
+                if not data:
+                    break
+                text = data.decode("utf-8", errors="replace")
+                buf += text
+                if not self._sudo_sent and "password" in buf.lower():
+                    chan.send((self._sudo_password + "\n").encode("utf-8"))
+                    self._sudo_sent = True
+                self._on_output(text)
+        finally:
+            with self._lock:
+                self._running = False
+            self._on_ended()
