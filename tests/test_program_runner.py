@@ -42,6 +42,33 @@ def test_stop_sends_ctrl_c():
     assert CTRL_C in chan.sent
 
 
+def test_read_loop_logs_eof_reason():
+    chan = FakeChannel([b"Last login: ...\n"])   # banner, then b"" (EOF)
+    session = FakeSession()
+    session.shell = chan
+    outputs = []
+    runner = ProgramRunner(session, on_output=outputs.append, on_ended=lambda: None)
+    runner.start()
+    _wait(runner)
+    assert "远端关闭了连接" in "".join(outputs)
+
+
+def test_read_loop_logs_exception_reason():
+    class ErrChannel(FakeChannel):
+        def recv(self, n):
+            raise OSError("pipe broken")
+    session = FakeSession()
+    session.shell = ErrChannel()
+    outputs = []
+    runner = ProgramRunner(session, on_output=outputs.append, on_ended=lambda: None)
+    runner.start()
+    _wait(runner)
+    joined = "".join(outputs)
+    assert "通道异常" in joined
+    assert "pipe broken" in joined
+
+
+
 def test_stop_resets_state_and_ends_session_for_live_shell():
     # A live interactive shell (what invoke_shell actually is) does NOT EOF when
     # the foreground process dies. stop() must still reset state + close the

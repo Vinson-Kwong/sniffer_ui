@@ -29,10 +29,13 @@ class ProgramRunner:
             self._channel = self._session.open_shell()
             self._sudo_sent = False
             self._ended = False
+            self._command_sent = False
             self._running = True
             self._thread = threading.Thread(target=self._read_loop, daemon=True)
             self._thread.start()
-            self._channel.send(RUN_COMMAND.encode("utf-8"))
+            # The run command is sent from the reader once the shell produces
+            # its first output (= ready). Sending the instant invoke_shell()
+            # returns can be lost on some SSH servers.
 
     def stop(self) -> None:
         """Send Ctrl+C to the foreground process, then end the session.
@@ -70,14 +73,29 @@ class ProgramRunner:
             while True:
                 try:
                     data = chan.recv(4096)
-                except Exception:
+                except Exception as e:
+                    self._on_output(f"[运行] 通道异常: {type(e).__name__}: {e}\n")
                     break
                 if not data:
+                    self._on_output("[运行] 远端关闭了连接\n")
                     break
                 text = data.decode("utf-8", errors="replace")
                 buf += text
+                # send the run command once the shell is ready (first output)
+                if not self._command_sent:
+                    self._command_sent = True
+                    try:
+                        chan.send(RUN_COMMAND.encode("utf-8"))
+                    except Exception as e:
+                        self._on_output(f"[运行] 发送命令失败: {type(e).__name__}: {e}\n")
+                    else:
+                        self._on_output("[运行] 已发送: sudo ~/ats/sniffer --bin\n")
+                # feed the sudo password when prompted
                 if not self._sudo_sent and "password" in buf.lower():
-                    chan.send((self._sudo_password + "\n").encode("utf-8"))
+                    try:
+                        chan.send((self._sudo_password + "\n").encode("utf-8"))
+                    except Exception:
+                        pass
                     self._sudo_sent = True
                 self._on_output(text)
         finally:
