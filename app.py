@@ -258,8 +258,10 @@ class App(ctk.CTk):
                 self._log(f"[运行失败] {e}\n")
                 self._schedule(self._refresh_controls)
                 return
-            # Confirm the program actually stays up before claiming success:
-            # a missing/broken binary exits almost immediately.
+            # Button -> 停止 immediately now that the program is launched.
+            self._schedule(self._refresh_controls)
+            # Then confirm it actually stays up before logging success;
+            # a broken binary exits almost immediately and reverts the button.
             time.sleep(1.2)
             if self.runner.is_running:
                 self._log("[运行成功] sudo ~/ats/sniffer --bin 已启动\n")
