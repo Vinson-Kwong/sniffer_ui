@@ -61,6 +61,8 @@ class App(ctk.CTk):
         self.local_ip_var = ctk.StringVar()
         self.local_ip_box = ctk.CTkOptionMenu(r1, variable=self.local_ip_var, values=[], width=180)
         self.local_ip_box.pack(side="left", padx=8)
+        ctk.CTkButton(r1, text="↻", width=36, command=self.on_refresh_local_ips,
+                      font=ctk.CTkFont(size=16)).pack(side="left")
         ctk.CTkLabel(r1, text="端口:").pack(side="left", padx=(16, 0))
         self.port_entry = ctk.CTkEntry(r1, width=70); self.port_entry.insert(0, "22"); self.port_entry.pack(side="left", padx=8)
 
@@ -146,6 +148,11 @@ class App(ctk.CTk):
         self.local_ip_box.configure(values=ips)
         chosen = initial if initial in ips else (ips[0] if ips else "")
         self.local_ip_var.set(chosen)
+
+    def on_refresh_local_ips(self):
+        # keep the current selection if it is still present after re-scan
+        self._refresh_local_ips(initial=self.local_ip_var.get())
+        self._log(f"[本地IP] 已刷新: {', '.join(list_local_ipv4() or ['未检测到'])}\n")
 
     def _persist_config(self):
         try:
