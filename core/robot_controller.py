@@ -62,6 +62,15 @@ class RobotController:
         self._log(f"[已连接] {user}@{host}:{port}\n")
         return self._check_program()
 
+    def program_present_sync(self):
+        """Quick pre-flight: is ~/ats/sniffer present? Used before running."""
+        try:
+            code, _out, _err = self._session.run(f"test -f {PROGRAM_PATH}")
+        except Exception as e:
+            self._log(f"[检查程序异常] {e}\n")
+            return False
+        return code == 0
+
     def connect_and_check(self, host, port, user, password, on_done):
         def work():
             try:

@@ -2,6 +2,7 @@
 import os
 import queue
 import threading
+import time
 
 import customtkinter as ctk
 from tkinter import filedialog
@@ -248,12 +249,23 @@ class App(ctk.CTk):
 
         def work():
             try:
+                if not self.controller.program_present_sync():
+                    self._log("[运行失败] ~/ats/sniffer 不存在，请先上传并解压部署\n")
+                    self._schedule(self._refresh_controls)
+                    return
                 self.runner.start()
-                self._log("[运行成功] sudo ~/ats/sniffer --bin 已启动\n")
-                self._schedule(self._refresh_controls)
             except Exception as e:
                 self._log(f"[运行失败] {e}\n")
                 self._schedule(self._refresh_controls)
+                return
+            # Confirm the program actually stays up before claiming success:
+            # a missing/broken binary exits almost immediately.
+            time.sleep(1.2)
+            if self.runner.is_running:
+                self._log("[运行成功] sudo ~/ats/sniffer --bin 已启动\n")
+            else:
+                self._log("[运行失败] 程序启动后立即退出，请查看上方输出\n")
+            self._schedule(self._refresh_controls)
 
         threading.Thread(target=work, daemon=True).start()
 

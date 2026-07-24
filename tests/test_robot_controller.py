@@ -113,6 +113,26 @@ def test_delete_sync_failure_raises():
         pass
 
 
+def test_program_present_sync_reflects_exit_code():
+    from core.robot_controller import PROGRAM_PATH
+
+    present = FakeSession(); present.queue_run(0)   # `test -f` exits 0
+    c = _make(present)
+    assert c.program_present_sync() is True
+    assert any(PROGRAM_PATH in cmd for cmd in present.run_calls)
+
+    absent = FakeSession(); absent.queue_run(1)     # `test -f` exits 1
+    assert _make(absent).program_present_sync() is False
+
+
+def test_program_present_sync_false_on_error():
+    class ErrSession(FakeSession):
+        def run(self, command, timeout=30):
+            raise OSError("link down")
+    assert _make(ErrSession()).program_present_sync() is False
+
+
+
 def _capture_threads(monkeypatch):
     """Replace threading.Thread with a recording subclass so tests can join workers
     before draining the deferred callback queue (reproduces the real UI timing where
