@@ -20,7 +20,7 @@ ctk.set_default_color_theme("blue")
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Sniffer 部署工具")
+        self.title("Sniffer")
         self.geometry("760x680")
         self.minsize(660, 600)
 
