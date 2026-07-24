@@ -1,4 +1,5 @@
 """One-shot robot business actions (connect/check/upload/delete) + pure helpers."""
+import os
 import threading
 
 PROGRAM_PATH = "~/ats/sniffer"
@@ -14,6 +15,19 @@ def program_present_from_output(stdout: str):
         return True
     if _MISSING_TOKEN in stdout:
         return False
+    return None
+
+
+def build_decompress_command(remote_archive_path: str):
+    """Shell command to extract the archive into ~/ats/, or None if unsupported."""
+    p = remote_archive_path.lower()
+    dest = "~/ats/"
+    if p.endswith(".tar.gz") or p.endswith(".tgz"):
+        return f'tar -xzf "{remote_archive_path}" -C {dest}'
+    if p.endswith(".tar"):
+        return f'tar -xf "{remote_archive_path}" -C {dest}'
+    if p.endswith(".zip"):
+        return f'unzip -o "{remote_archive_path}" -d {dest}'
     return None
 
 
@@ -56,4 +70,30 @@ class RobotController:
             except Exception as e:
                 self._log(f"[连接失败] {e}\n")
                 self._schedule(lambda: on_done(connected=False, present=None, error=str(e)))
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---- upload + decompress ----
+    def _upload_sync(self, local_path):
+        name = os.path.basename(local_path)
+        cmd = build_decompress_command(f"~/ats/{name}")
+        if cmd is None:
+            raise ValueError(f"不支持的压缩格式: {name}")
+        home = self._session.run("echo $HOME")[1].strip() or "~"
+        abs_remote = f"{home}/ats/{name}"
+        self._log(f"[上传] {name} -> ~/ats/\n")
+        self._session.sftp_upload(local_path, abs_remote)
+        self._log(f"[解压] {name}\n")
+        code, _out, err = self._session.run(cmd)
+        if code != 0:
+            raise RuntimeError(f"解压失败 exit={code} {err.strip()}")
+        return self._check_program()
+
+    def upload_and_decompress(self, local_path, on_done):
+        def work():
+            try:
+                present = self._upload_sync(local_path)
+                self._schedule(lambda: on_done(ok=True, error=None, present=present))
+            except Exception as e:
+                self._log(f"[上传/解压失败] {e}\n")
+                self._schedule(lambda: on_done(ok=False, error=str(e)))
         threading.Thread(target=work, daemon=True).start()
