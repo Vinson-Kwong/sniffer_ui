@@ -40,3 +40,55 @@ def test_stop_sends_ctrl_c():
     runner._channel = chan
     runner.stop()
     assert CTRL_C in chan.sent
+
+
+def test_stop_resets_state_and_ends_session_for_live_shell():
+    # A live interactive shell (what invoke_shell actually is) does NOT EOF when
+    # the foreground process dies. stop() must still reset state + close the
+    # channel + fire on_ended, or the UI stays stuck on "停止".
+    import threading
+    import time
+
+    class LiveChannel:
+        def __init__(self):
+            self.sent = []
+            self._evt = threading.Event()
+            self.closed = False
+
+        def recv(self, n):
+            self._evt.wait(timeout=5)
+            return b""
+
+        def send(self, data):
+            if isinstance(data, str):
+                data = data.encode()
+            self.sent.append(data)
+            return len(data)
+
+        def send_ready(self):
+            return True
+
+        def exit_status_ready(self):
+            return False
+
+        def close(self):
+            self.closed = True
+            self._evt.set()
+
+    class LiveSession(FakeSession):
+        def open_shell(self):
+            self.shell = LiveChannel()
+            return self.shell
+
+    ended = []
+    session = LiveSession()
+    runner = ProgramRunner(session, on_output=lambda s: None, on_ended=lambda: ended.append(True))
+    runner.start()
+    time.sleep(0.2)
+    assert runner.is_running is True
+    runner.stop()
+    time.sleep(0.3)
+    assert runner.is_running is False
+    assert session.shell.closed is True
+    assert ended == [True]
+

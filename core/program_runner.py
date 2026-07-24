@@ -16,6 +16,7 @@ class ProgramRunner:
         self._running = False
         self._lock = threading.Lock()
         self._sudo_sent = False
+        self._ended = False
 
     @property
     def is_running(self) -> bool:
@@ -27,16 +28,40 @@ class ProgramRunner:
                 return
             self._channel = self._session.open_shell()
             self._sudo_sent = False
+            self._ended = False
             self._running = True
             self._thread = threading.Thread(target=self._read_loop, daemon=True)
             self._thread.start()
             self._channel.send(RUN_COMMAND.encode("utf-8"))
 
     def stop(self) -> None:
+        """Send Ctrl+C to the foreground process, then end the session.
+
+        The interactive shell stays open after the foreground process dies, so
+        the reader loop would never see EOF and the UI would stay stuck on
+        "停止". We close the channel and reset state here so the UI returns to
+        idle (button -> 运行, other controls re-enabled)."""
         with self._lock:
             if not self._running or self._channel is None:
                 return
-            self._channel.send(CTRL_C)
+            try:
+                self._channel.send(CTRL_C)
+            except Exception:
+                pass
+            try:
+                self._channel.close()
+            except Exception:
+                pass
+            self._running = False
+        self._fire_ended()
+
+    def _fire_ended(self) -> None:
+        """Invoke on_ended exactly once per run (stop() and the reader race)."""
+        with self._lock:
+            if self._ended:
+                return
+            self._ended = True
+        self._on_ended()
 
     def _read_loop(self) -> None:
         chan = self._channel
@@ -58,4 +83,4 @@ class ProgramRunner:
         finally:
             with self._lock:
                 self._running = False
-            self._on_ended()
+            self._fire_ended()
