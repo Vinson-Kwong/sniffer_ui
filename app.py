@@ -249,6 +249,7 @@ class App(ctk.CTk):
         def work():
             try:
                 self.runner.start()
+                self._log("[运行成功] sudo ~/ats/sniffer --bin 已启动\n")
                 self._schedule(self._refresh_controls)
             except Exception as e:
                 self._log(f"[运行失败] {e}\n")
