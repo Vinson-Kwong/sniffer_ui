@@ -2,6 +2,8 @@
 import socket
 import threading
 
+from core.ssh_session import strip_ansi
+
 RUN_COMMAND = "sudo ~/ats/sniffer --bin\n"
 CTRL_C = b"\x03"
 
@@ -84,7 +86,7 @@ class ProgramRunner:
                 if not data:
                     self._on_output("[运行] 远端关闭了连接\n")
                     break
-                text = data.decode("utf-8", errors="replace")
+                text = strip_ansi(data.decode("utf-8", errors="replace"))
                 buf += text
                 # send the run command once the shell is ready (first output)
                 if not self._command_sent:

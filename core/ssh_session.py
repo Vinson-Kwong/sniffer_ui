@@ -1,7 +1,16 @@
 """SSH transport wrapper + Session/Channel protocols the rest of the core depends on."""
+import re
 from typing import Protocol
 
 import paramiko
+
+# ANSI/VT100 CSI escape sequences (color, cursor, etc.) -- programs emit these
+# when attached to a PTY; we strip them so the log shows clean text.
+_ANSI_RE = re.compile(r"\x1B\[[0-9;?]*[a-zA-Z]")
+
+
+def strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", s)
 
 
 class Channel(Protocol):
@@ -23,8 +32,8 @@ class Session(Protocol):
 
 
 def decode_exec(stdout_bytes: bytes, stderr_bytes: bytes, exit_code: int) -> "tuple[int, str, str]":
-    out = stdout_bytes.decode("utf-8", errors="replace")
-    err = stderr_bytes.decode("utf-8", errors="replace")
+    out = strip_ansi(stdout_bytes.decode("utf-8", errors="replace"))
+    err = strip_ansi(stderr_bytes.decode("utf-8", errors="replace"))
     return exit_code, out, err
 
 

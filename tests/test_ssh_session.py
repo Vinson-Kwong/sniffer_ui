@@ -1,6 +1,12 @@
 import paramiko
 
-from core.ssh_session import SSHSession, decode_exec
+from core.ssh_session import SSHSession, decode_exec, strip_ansi
+
+
+def test_strip_ansi_removes_color_codes():
+    assert strip_ansi("\x1b[1;34mcreated\x1b[0m file") == "created file"
+    assert strip_ansi("\x1b[?25lhide\x1b[?25h") == "hide"
+    assert strip_ansi("plain text") == "plain text"
 
 
 def test_decode_exec_decodes_and_keeps_exit_code():
@@ -11,6 +17,12 @@ def test_decode_exec_replaces_invalid_utf8():
     code, out, err = decode_exec(b"\xff\xfeok", b"", 1)
     assert code == 1
     assert "ok" in out  # invalid bytes replaced, no crash
+
+
+def test_decode_exec_strips_ansi():
+    code, out, err = decode_exec(b"\x1b[32mok\x1b[0m\n", b"\x1b[31mwarn\x1b[0m", 0)
+    assert out == "ok\n"
+    assert err == "warn"
 
 
 def test_connect_uses_password_auth_and_autoadd(monkeypatch):

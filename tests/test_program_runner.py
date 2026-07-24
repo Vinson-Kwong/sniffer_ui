@@ -68,6 +68,20 @@ def test_read_loop_logs_exception_reason():
     assert "pipe broken" in joined
 
 
+def test_read_loop_strips_ansi_from_output():
+    # The sniffer emits color codes via the PTY; they must not leak into the log.
+    chan = FakeChannel([b"\x1b[1;34mcreated file\x1b[0m\n"])
+    session = FakeSession()
+    session.shell = chan
+    outputs = []
+    runner = ProgramRunner(session, on_output=outputs.append, on_ended=lambda: None)
+    runner.start()
+    _wait(runner)
+    joined = "".join(outputs)
+    assert "created file\n" in joined
+    assert "\x1b" not in joined
+
+
 def test_read_loop_survives_recv_timeouts():
     # A non-blocking/paced socket raises socket.timeout when no data has arrived
     # YET. The reader must retry, not treat it as a fatal error and exit.
