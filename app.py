@@ -161,8 +161,22 @@ class App(ctk.CTk):
         if not ips:
             ips = [""]
         self.local_ip_box.configure(values=ips)
-        chosen = initial if initial in ips else (ips[0] if ips else "")
+        if initial in ips:
+            chosen = initial
+        else:
+            chosen = self._preferred_local_ip(ips)
         self.local_ip_var.set(chosen)
+
+    def _preferred_local_ip(self, ips):
+        # Prefer an adapter in the same /24 as the target (e.g. 192.168.1.x
+        # for a 192.168.1.x robot); fall back to the first detected IP.
+        octets = self.target_entry.get().strip().split(".")
+        if len(octets) == 4:
+            prefix = ".".join(octets[:3]) + "."
+            for ip in ips:
+                if ip.startswith(prefix):
+                    return ip
+        return ips[0] if ips else ""
 
     def on_refresh_local_ips(self):
         # keep the current selection if it is still present after re-scan
