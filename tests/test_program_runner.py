@@ -92,6 +92,41 @@ def test_read_loop_strips_ansi_from_output():
     assert "\x1b" not in joined
 
 
+def test_read_loop_reports_created_mocap_dir():
+    chan = FakeChannel([b"created mocap dir: /tmp/mocap/20260804\n"])
+    session = FakeSession()
+    session.shell = chan
+    mocap_dirs = []
+    runner = ProgramRunner(
+        session,
+        on_output=lambda s: None,
+        on_ended=lambda: None,
+        on_mocap_dir=mocap_dirs.append,
+    )
+    runner.start()
+    _wait(runner)
+    assert mocap_dirs == ["/tmp/mocap/20260804"]
+
+
+def test_read_loop_reports_mocap_dir_split_across_chunks():
+    chan = FakeChannel([
+        b"initializing\ncreated mocap ",
+        b"dir: /tmp/mocap/session-1\nready\n",
+    ])
+    session = FakeSession()
+    session.shell = chan
+    mocap_dirs = []
+    runner = ProgramRunner(
+        session,
+        on_output=lambda s: None,
+        on_ended=lambda: None,
+        on_mocap_dir=mocap_dirs.append,
+    )
+    runner.start()
+    _wait(runner)
+    assert mocap_dirs == ["/tmp/mocap/session-1"]
+
+
 def test_read_loop_survives_recv_timeouts():
     # A non-blocking/paced socket raises socket.timeout when no data has arrived
     # YET. The reader must retry, not treat it as a fatal error and exit.

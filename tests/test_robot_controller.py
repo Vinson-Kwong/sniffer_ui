@@ -1,3 +1,4 @@
+from pathlib import Path
 import threading
 
 from core.robot_controller import (
@@ -110,6 +111,67 @@ def test_delete_sync_failure_raises():
         c._delete_sync()
         assert False, "expected raise"
     except RuntimeError:
+        pass
+
+
+def test_copy_mocap_sync_keeps_archive_and_reports_progress(tmp_path):
+    s = FakeSession()
+    logs = []
+    progress = []
+    c = RobotController(
+        s, schedule=lambda f: f(), log=logs.append,
+        sudo_password=lambda: "MangoTango",
+    )
+    archive_path = c._copy_mocap_sync(
+        "/data/mocap/session-1", str(tmp_path),
+        on_progress=lambda transferred, total: progress.append((transferred, total)),
+    )
+
+    final_archive = Path(archive_path)
+    assert final_archive.parent == tmp_path.resolve()
+    assert final_archive.name.startswith("session-1-")
+    assert final_archive.name.endswith(".tar.gz")
+    assert final_archive.read_bytes() == b"test data"
+    assert not (tmp_path / "session-1").exists()
+    assert len(s.downloaded) == 1
+    remote_archive, partial_archive = s.downloaded[0]
+    assert remote_archive.startswith("/data/mocap/.sniffer-mocap-")
+    assert remote_archive.endswith(".tar.gz")
+    assert partial_archive.endswith(".tar.gz.part")
+    assert not Path(partial_archive).exists()
+    assert progress == [(9, 9)]
+    assert any(cmd.startswith("tar -czf ") for cmd in s.run_calls)
+    cleanup = next(cmd for cmd in s.run_calls if cmd.startswith("rm -f "))
+    assert "&& sudo -S rm -rf -- /data/mocap/session-1" in cleanup
+    cleanup_index = s.run_calls.index(cleanup)
+    assert s.run_inputs[cleanup_index] == "MangoTango\n"
+    assert any("压缩包已保存" in line for line in logs)
+    assert any("远端数据已删除" in line for line in logs)
+
+
+def test_copy_mocap_sync_cleans_remote_archive_when_compression_fails(tmp_path):
+    s = FakeSession()
+    s.queue_run(0, "")
+    s.queue_run(1, "", "disk full")
+    c = _make(s)
+
+    try:
+        c._copy_mocap_sync("/data/mocap/session-1", str(tmp_path))
+        assert False, "expected raise"
+    except RuntimeError as e:
+        assert "压缩失败" in str(e)
+
+    cleanup = next(cmd for cmd in s.run_calls if cmd.startswith("rm -f "))
+    assert "sudo -S rm -rf" not in cleanup
+    assert list(tmp_path.glob(".sniffer-mocap-*.tar.gz")) == []
+
+
+def test_copy_mocap_sync_rejects_empty_path(tmp_path):
+    c = _make(FakeSession())
+    try:
+        c._copy_mocap_sync("", str(tmp_path))
+        assert False, "expected raise"
+    except ValueError:
         pass
 
 

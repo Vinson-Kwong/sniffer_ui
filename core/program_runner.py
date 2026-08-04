@@ -1,19 +1,21 @@
-"""Long-lived interactive shell for `sudo ~/ats/sniffer --bin`; stop = Ctrl+C (\\x03)."""
+"""Long-lived interactive shell for `cd ~/ats && sudo ./sniffer --bin`; stop = Ctrl+C (\\x03)."""
 import socket
 import threading
 
 from core.ssh_session import strip_ansi
 
-RUN_COMMAND = "sudo ~/ats/sniffer --bin\n"
+RUN_COMMAND = "cd ~/ats && sudo ./sniffer --bin\n"
 CTRL_C = b"\x03"
 
 
 class ProgramRunner:
-    def __init__(self, session, on_output, on_ended, sudo_password=""):
+    def __init__(self, session, on_output, on_ended, sudo_password="",
+                 on_mocap_dir=None):
         self._session = session
         self._on_output = on_output
         self._on_ended = on_ended
         self._sudo_password = sudo_password if isinstance(sudo_password, str) else ""
+        self._on_mocap_dir = on_mocap_dir or (lambda path: None)
         self._channel = None
         self._thread = None
         self._running = False
@@ -74,6 +76,8 @@ class ProgramRunner:
     def _read_loop(self) -> None:
         chan = self._channel
         buf = ""
+        line_buf = ""
+        mocap_marker = "created mocap dir: "
         try:
             while True:
                 try:
@@ -90,6 +94,17 @@ class ProgramRunner:
                     break
                 text = strip_ansi(data.decode("utf-8", errors="replace"))
                 buf += text
+                line_buf += text
+                lines = line_buf.splitlines(keepends=True)
+                line_buf = ""
+                for line in lines:
+                    if not line.endswith(("\n", "\r")):
+                        line_buf = line
+                        continue
+                    if mocap_marker in line:
+                        path = line.split(mocap_marker, 1)[1].strip()
+                        if path:
+                            self._on_mocap_dir(path)
                 # send the run command once the shell is ready (first output)
                 if not self._command_sent:
                     self._command_sent = True

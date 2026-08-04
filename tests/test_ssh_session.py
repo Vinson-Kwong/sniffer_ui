@@ -1,3 +1,6 @@
+import stat
+from types import SimpleNamespace
+
 import paramiko
 
 from core.ssh_session import SSHSession, decode_exec, strip_ansi
@@ -50,9 +53,17 @@ def test_connect_uses_password_auth_and_autoadd(monkeypatch):
 class _FakeStream:
     def __init__(self, data=b""):
         self._data = data
+        self.written = ""
+        self.flushed = False
 
     def read(self):
         return self._data
+
+    def write(self, data):
+        self.written += data
+
+    def flush(self):
+        self.flushed = True
 
 
 class _FakeStdout(_FakeStream):
@@ -73,11 +84,12 @@ class _FakeStdout(_FakeStream):
 
 class FakeExecClient:
     def __init__(self, out, err, code):
+        self._in = _FakeStream()
         self._out = _FakeStdout(out, code)
         self._err = _FakeStream(err)
 
     def exec_command(self, command, timeout=None):
-        return None, self._out, self._err
+        return self._in, self._out, self._err
 
 
 def test_run_decodes_output_and_exit_code():
@@ -85,3 +97,87 @@ def test_run_decodes_output_and_exit_code():
     s._client = FakeExecClient(b"ok\n", b"warn", 0)
     code, out, err = s.run("echo ok")
     assert (code, out, err) == (0, "ok\n", "warn")
+
+
+def test_run_writes_input_data_for_sudo():
+    s = SSHSession()
+    client = FakeExecClient(b"", b"", 0)
+    s._client = client
+    s.run("sudo -S rm -rf /tmp/data", input_data="MangoTango\n")
+    assert client._in.written == "MangoTango\n"
+    assert client._in.flushed is True
+
+
+def test_sftp_download_gets_file_and_closes_client(tmp_path):
+    class FakeSFTP:
+        def __init__(self):
+            self.get_calls = []
+            self.closed = False
+
+        def get(self, remote, local, callback=None):
+            self.get_calls.append((remote, local, callback))
+            if callback is not None:
+                callback(25, 100)
+
+        def close(self):
+            self.closed = True
+
+    sftp = FakeSFTP()
+    session = SSHSession()
+    session._client = SimpleNamespace(open_sftp=lambda: sftp)
+    local = tmp_path / "data.tar.gz"
+    progress = []
+
+    session.sftp_download(
+        "/remote/data.tar.gz", str(local), callback=lambda a, b: progress.append((a, b))
+    )
+
+    assert len(sftp.get_calls) == 1
+    assert sftp.get_calls[0][:2] == ("/remote/data.tar.gz", str(local))
+    assert progress == [(25, 100)]
+    assert sftp.closed is True
+
+
+def test_sftp_download_dir_recursively_downloads_files(tmp_path):
+    directory_mode = stat.S_IFDIR | 0o755
+    file_mode = stat.S_IFREG | 0o644
+
+    class FakeSFTP:
+        def __init__(self):
+            self.get_calls = []
+            self.closed = False
+
+        def listdir_attr(self, path):
+            entries = {
+                "/remote/session-1": [
+                    SimpleNamespace(filename="capture.bin", st_mode=file_mode),
+                    SimpleNamespace(filename="nested", st_mode=directory_mode),
+                ],
+                "/remote/session-1/nested": [
+                    SimpleNamespace(filename="meta.txt", st_mode=file_mode),
+                ],
+            }
+            return entries[path]
+
+        def get(self, remote, local):
+            self.get_calls.append((remote, local))
+
+        def close(self):
+            self.closed = True
+
+    sftp = FakeSFTP()
+    client = SimpleNamespace(open_sftp=lambda: sftp)
+    session = SSHSession()
+    session._client = client
+
+    destination = session.sftp_download_dir(
+        "/remote/session-1/", str(tmp_path)
+    )
+
+    assert destination == str((tmp_path / "session-1").resolve())
+    assert sftp.get_calls == [
+        ("/remote/session-1/capture.bin", str(tmp_path / "session-1" / "capture.bin")),
+        ("/remote/session-1/nested/meta.txt", str(tmp_path / "session-1" / "nested" / "meta.txt")),
+    ]
+    assert (tmp_path / "session-1" / "nested").is_dir()
+    assert sftp.closed is True

@@ -1,6 +1,9 @@
 """One-shot robot business actions (connect/check/upload/delete) + pure helpers."""
 import os
+from pathlib import Path, PurePosixPath
+import shlex
 import threading
+import uuid
 
 PROGRAM_PATH = "~/ats/sniffer"
 REMOTE_DIR = "~/ats"
@@ -144,4 +147,97 @@ class RobotController:
                 msg = str(e)  # bind before the lambda (except target is cleared on block exit)
                 self._log(f"[删除失败] {e}\n")
                 self._schedule(lambda: on_done(ok=False, error=msg))
+        threading.Thread(target=work, daemon=True).start()
+
+    # ---- mocap data copy ----
+    def _copy_mocap_sync(self, remote_path, local_parent, on_progress=None):
+        remote_path = remote_path.strip().rstrip("/")
+        remote_dir = PurePosixPath(remote_path)
+        if not remote_path or not remote_dir.name:
+            raise ValueError("尚未获取有效的 mocap 目录")
+
+        local_parent = Path(local_parent).resolve()
+        local_parent.mkdir(parents=True, exist_ok=True)
+        token = uuid.uuid4().hex
+        remote_name = f".sniffer-mocap-{token}.tar.gz"
+        local_name = f"{remote_dir.name}-{token}.tar.gz"
+        remote_archive = str(remote_dir.parent / remote_name)
+        local_archive = local_parent / local_name
+        partial_archive = local_parent / f"{local_name}.part"
+
+        quoted_path = shlex.quote(remote_path)
+        quoted_archive = shlex.quote(remote_archive)
+        quoted_parent = shlex.quote(str(remote_dir.parent))
+        quoted_name = shlex.quote(remote_dir.name)
+        copy_succeeded = False
+
+        try:
+            code, _out, err = self._session.run(
+                f"test -d {quoted_path}", timeout=30
+            )
+            if code != 0:
+                raise RuntimeError(f"mocap 目录不存在: {remote_path} {err.strip()}")
+
+            self._log(f"[数据压缩] {remote_path}\n")
+            code, _out, err = self._session.run(
+                f"tar -czf {quoted_archive} -C {quoted_parent} {quoted_name}",
+                timeout=3600,
+            )
+            if code != 0:
+                raise RuntimeError(f"压缩失败 exit={code} {err.strip()}")
+
+            self._log(f"[数据下载] {remote_archive} -> {local_archive}\n")
+            self._session.sftp_download(
+                remote_archive, str(partial_archive), callback=on_progress
+            )
+            partial_archive.replace(local_archive)
+            copy_succeeded = True
+
+            self._log(f"[数据拷贝完成] 压缩包已保存: {local_archive}\n")
+            return str(local_archive)
+        finally:
+            try:
+                cleanup_command = f"rm -f {quoted_archive}"
+                input_data = ""
+                if copy_succeeded:
+                    cleanup_command += f" && sudo -S rm -rf -- {quoted_path}"
+                    input_data = self._sudo_password() + "\n"
+                code, _out, err = self._session.run(
+                    cleanup_command, timeout=30, input_data=input_data
+                )
+                if code != 0:
+                    self._log(f"[远端数据清理失败] {err.strip()}\n")
+                elif copy_succeeded:
+                    self._log(f"[远端数据已删除] {remote_path}\n")
+            except Exception as e:
+                self._log(f"[远端数据清理失败] {e}\n")
+            try:
+                partial_archive.unlink(missing_ok=True)
+            except OSError as e:
+                self._log(f"[本地临时文件清理失败] {e}\n")
+
+    def copy_mocap_data(self, remote_path, local_parent, on_done,
+                        on_progress=None):
+        def progress(transferred, total):
+            if on_progress is not None:
+                self._schedule(
+                    lambda transferred=transferred, total=total:
+                    on_progress(transferred, total)
+                )
+
+        def work():
+            try:
+                archive_path = self._copy_mocap_sync(
+                    remote_path, local_parent, progress
+                )
+                self._schedule(
+                    lambda: on_done(ok=True, error=None,
+                                    archive_path=archive_path)
+                )
+            except Exception as e:
+                msg = str(e)
+                self._log(f"[数据拷贝失败] {e}\n")
+                self._schedule(
+                    lambda: on_done(ok=False, error=msg, archive_path=None)
+                )
         threading.Thread(target=work, daemon=True).start()

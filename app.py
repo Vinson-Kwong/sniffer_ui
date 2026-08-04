@@ -1,5 +1,6 @@
 """Main window: layout, worker-thread marshalling, button handlers."""
 import os
+from pathlib import Path
 import queue
 import threading
 import time
@@ -28,6 +29,8 @@ class App(ctk.CTk):
         self._queue: "queue.Queue" = queue.Queue()
         self._last_dir = ""
         self._connected = False
+        self._mocap_dir = ""
+        self._copying_data = False
 
         self.session = SSHSession()
         self.controller = RobotController(
@@ -41,6 +44,9 @@ class App(ctk.CTk):
             on_output=self._log,
             on_ended=lambda: self._schedule(self._on_run_ended),
             sudo_password=lambda: self.pw_entry.get(),
+            on_mocap_dir=lambda path: self._schedule(
+                lambda path=path: self._set_mocap_dir(path)
+            ),
         )
 
         self._build_ui()
@@ -111,6 +117,22 @@ class App(ctk.CTk):
         self.delete_btn = ctk.CTkButton(rf1, text="删除 ~/ats/sniffer", width=180,
                                         fg_color="#a33", hover_color="#922", command=self.on_delete)
         self.delete_btn.pack(side="left", padx=12)
+        self.mocap_dir_label = ctk.CTkLabel(
+            runf, text="Mocap目录: 等待程序输出", anchor="w"
+        )
+        self.mocap_dir_label.pack(fill="x", padx=8, pady=(0, 6))
+
+        copyf = ctk.CTkFrame(self); copyf.pack(fill="x", padx=12, pady=6)
+        ctk.CTkLabel(copyf, text="数据拷贝删除", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
+        copy_row = ctk.CTkFrame(copyf, fg_color="transparent"); copy_row.pack(fill="x", **pad)
+        self.copy_btn = ctk.CTkButton(copy_row, text="拷贝删除", width=120,
+                                      command=self.on_copy_data)
+        self.copy_btn.pack(side="left")
+        self.copy_progress = ctk.CTkProgressBar(copy_row, mode="determinate")
+        self.copy_progress.pack(side="left", padx=12, fill="x", expand=True)
+        self.copy_progress.set(0)
+        self.copy_progress_label = ctk.CTkLabel(copy_row, text="0%", width=150)
+        self.copy_progress_label.pack(side="left")
 
         ctk.CTkLabel(self, text="日志", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=16, pady=(8, 0))
         self.log_view = LogView(self, height=240)
@@ -153,7 +175,7 @@ class App(ctk.CTk):
         self.user_entry.insert(0, cfg.get("username", "robot"))
         self.pw_entry.insert(0, cfg.get("password", "MangoTango"))
         self._last_dir = cfg.get("last_archive_dir", "")
-        self.run_cmd_entry.insert(0, cfg.get("run_command", "sudo ~/ats/sniffer --bin"))
+        self.run_cmd_entry.insert(0, cfg.get("run_command", "cd ~/ats && sudo ./sniffer --bin"))
         self._refresh_local_ips(initial=cfg.get("local_ip", ""))
 
     def _refresh_local_ips(self, initial=""):
@@ -247,6 +269,23 @@ class App(ctk.CTk):
         else:
             self.check_label.configure(text="程序检查 ~/ats/sniffer: ❓ 未知", text_color="#cccccc")
 
+    def _set_mocap_dir(self, path=""):
+        self._mocap_dir = path
+        text = f"Mocap目录: {path}" if path else "Mocap目录: 等待程序输出"
+        self.mocap_dir_label.configure(text=text)
+        self._refresh_controls()
+
+    def _set_copy_progress(self, transferred, total):
+        if total > 0:
+            fraction = min(1.0, max(0.0, transferred / total))
+            self.copy_progress.set(fraction)
+            self.copy_progress_label.configure(
+                text=f"{fraction:.0%} ({transferred} / {total} 字节)"
+            )
+        else:
+            self.copy_progress.set(0)
+            self.copy_progress_label.configure(text=f"{transferred} 字节")
+
     def _refresh_controls(self):
         running = self.runner.is_running
         self.connect_btn.configure(state="disabled" if running else "normal")
@@ -255,6 +294,8 @@ class App(ctk.CTk):
         self.delete_btn.configure(state="normal" if ok else "disabled")
         self.run_btn.configure(state="normal" if self._connected else "disabled",
                                text="停止" if running else "运行")
+        can_copy = self._connected and bool(self._mocap_dir) and not self._copying_data
+        self.copy_btn.configure(state="normal" if can_copy else "disabled")
 
     # ---------------- handlers ----------------
     def on_browse(self):
@@ -306,6 +347,30 @@ class App(ctk.CTk):
 
         self.controller.delete_program(done)
 
+    def on_copy_data(self):
+        if not self.session.connected:
+            self._log("[数据拷贝] 请先连接目标\n"); return
+        if not self._mocap_dir:
+            self._log("[数据拷贝] 尚未获取 mocap 目录\n"); return
+        self._copying_data = True
+        self.copy_progress.set(0)
+        self.copy_progress_label.configure(text="0%")
+        self._refresh_controls()
+
+        def done(ok, error, archive_path):
+            self._copying_data = False
+            if ok:
+                self.copy_progress.set(1)
+                self.copy_progress_label.configure(text="100%（完成）")
+            else:
+                self.copy_progress_label.configure(text="拷贝失败")
+            self._refresh_controls()
+
+        self.controller.copy_mocap_data(
+            self._mocap_dir, str(Path.cwd()), done,
+            on_progress=self._set_copy_progress,
+        )
+
     def on_run_toggle(self):
         if self.runner.is_running:
             self.runner.stop()
@@ -317,6 +382,7 @@ class App(ctk.CTk):
         if not command:
             self._log("[运行] 运行命令为空\n"); return
         self.run_btn.configure(state="disabled")
+        self._set_mocap_dir()
 
         def work():
             try:
