@@ -3,16 +3,17 @@ from pathlib import Path
 
 from core.bvh_merger import (
     build_merge_command,
+    copy_dest_name,
     decode_output,
     merge_app_exe_path,
-    merged_copy_name,
 )
 
 
-def test_merged_copy_name_appends_merge_suffix():
-    assert merged_copy_name("D:/take.bvh") == "take_merge.bvh"
-    assert merged_copy_name("D:/a.b.bvh") == "a.b_merge.bvh"
-    assert merged_copy_name(Path("C:/x/001-walk.bvh")) == "001-walk_merge.bvh"
+def test_copy_dest_name_keeps_original_name():
+    # mocap_merge discovers the optical bvh by filename suffix
+    # (*BDX.bvh / *BDX0709.bvh), so the copy must keep the original name.
+    assert copy_dest_name("D:/take.bvh") == "take.bvh"
+    assert copy_dest_name(Path("C:/x/BDX_0817fang1-BDX0709.bvh")) == "BDX_0817fang1-BDX0709.bvh"
 
 
 def test_build_merge_command_is_folder_then_verbose():
@@ -88,7 +89,7 @@ def _make_source(tmp_path, name="take.bvh", content=b"MOTION Frames 1"):
     return src
 
 
-def test_merge_sync_copies_bvh_with_merge_suffix_and_runs_exe(merger, tmp_path):
+def test_merge_sync_copies_bvh_under_original_name_and_runs_exe(merger, tmp_path):
     m, logs = merger
     src = _make_source(tmp_path)
     folder = tmp_path / "data"
@@ -96,26 +97,24 @@ def test_merge_sync_copies_bvh_with_merge_suffix_and_runs_exe(merger, tmp_path):
 
     m._merge_sync(str(folder), str(src))
 
-    copied = folder / "take_merge.bvh"
+    copied = folder / "take.bvh"
     assert copied.read_bytes() == b"MOTION Frames 1"
-    # the original-named file is never created
-    assert not (folder / "take.bvh").exists()
     assert any("已拷贝" in line for line in logs)
     assert any("merge-ok" in line for line in logs), f"exe output not streamed: {logs}"
     assert any("退出码=0" in line for line in logs)
     assert any("完成" in line for line in logs)
 
 
-def test_merge_sync_overwrites_own_merge_artifact(merger, tmp_path):
+def test_merge_sync_overwrites_stale_same_name_copy(merger, tmp_path):
     m, _logs = merger
     src = _make_source(tmp_path, content=b"new")
     folder = tmp_path / "data"
     folder.mkdir()
-    (folder / "take_merge.bvh").write_bytes(b"old")  # leftover from a previous run
+    (folder / "take.bvh").write_bytes(b"old")  # stale copy from a previous run
 
     m._merge_sync(str(folder), str(src))
 
-    assert (folder / "take_merge.bvh").read_bytes() == b"new"
+    assert (folder / "take.bvh").read_bytes() == b"new"
 
 
 def test_merge_sync_raises_on_exe_failure(merger, tmp_path):
@@ -207,7 +206,7 @@ def test_merge_sync_runs_real_source_and_surfaces_missing_input_error(tmp_path):
         m._merge_sync(str(folder), str(src))
 
     # the copy happened before the tool ran
-    assert (folder / "take_merge.bvh").read_bytes() == b"MOTION Frames 1"
+    assert (folder / "take.bvh").read_bytes() == b"MOTION Frames 1"
     # the tool's own error is visible in the log (no more silent failure)
     assert any("missing required input" in line for line in logs)
     assert any("退出码=1" in line for line in logs)

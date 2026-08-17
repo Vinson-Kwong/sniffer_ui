@@ -1,5 +1,5 @@
-"""Local BVH merge: copy the selected bvh into a folder as *_merge.bvh, then
-run mocap-merge on the folder and stream its output.
+"""Local BVH merge: copy the selected bvh into a folder under its original
+name, then run mocap-merge on the folder and stream its output.
 
 Runner selection (AV false positives hit the packed exe): prefer running the
 mocap_merge source via `python -m mocap_merge` with PYTHONPATH pointing at
@@ -28,9 +28,13 @@ def mocap_merge_source_dir() -> Path:
     return _app_base_dir() / "merge_app" / "src"
 
 
-def merged_copy_name(bvh_path) -> str:
-    """Destination filename inside the merge folder: <stem>_merge.bvh."""
-    return f"{Path(bvh_path).stem}_merge.bvh"
+def copy_dest_name(bvh_path) -> str:
+    """Destination filename inside the merge folder: the original name.
+
+    mocap_merge discovers the optical bvh by filename suffix
+    (*BDX.bvh / *BDX0709.bvh), so renaming the copy would hide it from
+    the tool. A same-named stale copy is simply overwritten."""
+    return Path(bvh_path).name
 
 
 def build_merge_command(exe_path, folder) -> list:
@@ -48,8 +52,8 @@ def decode_output(raw: bytes) -> str:
 
 
 class BvhMerger:
-    """Copies the bvh into the folder as <stem>_merge.bvh, then runs
-    mocap-merge.exe <folder> --verbose, streaming output through `log`."""
+    """Copies the bvh into the folder under its original name, then runs
+    mocap-merge on the folder, streaming output through `log`."""
 
     def __init__(self, schedule, log, exe_path=None, source_dir=None):
         self._schedule = schedule
@@ -96,8 +100,9 @@ class BvhMerger:
             raise ValueError(
                 f"未找到 {must_exist}（也可以把 mocap_merge 源码放到 {self._source_dir}）"
             )
-        dest = folder_path / merged_copy_name(src)
-        # dest may exist from an earlier run of this same feature: overwrite it.
+        dest = folder_path / copy_dest_name(src)
+        # dest may be a stale copy from an earlier run of this feature:
+        # overwriting it is an update of the same logical input.
         shutil.copy2(src, dest)
         self._log(f"[BVH融合] 已拷贝 {src.name} -> {dest}\n")
         self._log(f"[BVH融合] 执行: {' '.join(prefix)} {folder_path} --verbose\n")

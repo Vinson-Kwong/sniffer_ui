@@ -9,6 +9,12 @@
 > 源码从 github.com/Vinson-Kwong/mocap_merge 克隆）；仅当无解释器（PyInstaller
 > 打包的 sniffer_ui.exe）或源码缺失时回退到 exe。requirements.txt 相应新增
 > numpy/pyyaml。
+>
+> **2026-08-17 修订二（拷贝命名）**：原设计"拷贝为 `<stem>_merge.bvh`"与
+> mocap_merge 的输入发现规则冲突（`paths.py` 只认 `*BDX.bvh` / `*BDX0709.bvh`
+> 结尾的文件名，导致 `missing required input: optical BDX.bvh`）。经确认改为：
+> **拷贝保留原文件名**，同名旧拷贝视为同一逻辑输入的过期副本，直接覆盖；
+> 工具输出本来就是 `<文件夹名>_merge.bvh`，不会与输入冲突。
 
 ## 目标
 
