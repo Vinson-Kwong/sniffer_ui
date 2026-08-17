@@ -1,5 +1,11 @@
 """Local BVH merge: copy the selected bvh into a folder as *_merge.bvh, then
-run merge_app/mocap-merge.exe <folder> --verbose and stream its output."""
+run mocap-merge on the folder and stream its output.
+
+Runner selection (AV false positives hit the packed exe): prefer running the
+mocap_merge source via `python -m mocap_merge` with PYTHONPATH pointing at
+merge_app/src; fall back to merge_app/mocap-merge.exe (frozen builds, or when
+the source tree is absent)."""
+import os
 import shutil
 import subprocess
 import sys
@@ -7,13 +13,19 @@ import threading
 from pathlib import Path
 
 
-def merge_app_exe_path() -> Path:
-    """merge_app/ lives next to the frozen exe, else at the repo root."""
+def _app_base_dir() -> Path:
+    """Resources live next to the frozen exe, else at the repo root."""
     if getattr(sys, "frozen", False):
-        base = Path(sys.executable).resolve().parent
-    else:
-        base = Path(__file__).resolve().parent.parent
-    return base / "merge_app" / "mocap-merge.exe"
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent
+
+
+def merge_app_exe_path() -> Path:
+    return _app_base_dir() / "merge_app" / "mocap-merge.exe"
+
+
+def mocap_merge_source_dir() -> Path:
+    return _app_base_dir() / "merge_app" / "src"
 
 
 def merged_copy_name(bvh_path) -> str:
@@ -39,10 +51,26 @@ class BvhMerger:
     """Copies the bvh into the folder as <stem>_merge.bvh, then runs
     mocap-merge.exe <folder> --verbose, streaming output through `log`."""
 
-    def __init__(self, schedule, log, exe_path=None):
+    def __init__(self, schedule, log, exe_path=None, source_dir=None):
         self._schedule = schedule
         self._log = log
         self._exe = Path(exe_path) if exe_path else merge_app_exe_path()
+        self._source_dir = Path(source_dir) if source_dir else mocap_merge_source_dir()
+
+    def _resolve_runner(self):
+        """(command_prefix, extra_env, must_exist_path_or_None).
+
+        Source mode runs `python -m mocap_merge` — no packed exe for AV
+        heuristics to flag. Only in a dev/source run; a frozen app has no
+        interpreter, so it always uses the exe."""
+        if not getattr(sys, "frozen", False) and \
+                (self._source_dir / "mocap_merge" / "__init__.py").is_file():
+            env = dict(os.environ)
+            old = env.get("PYTHONPATH")
+            env["PYTHONPATH"] = f"{self._source_dir}{os.pathsep}{old}" if old \
+                else str(self._source_dir)
+            return [sys.executable, "-m", "mocap_merge"], env, None
+        return [str(self._exe)], None, self._exe
 
     def merge(self, folder, bvh_path, on_done):
         """Async entry point from the UI thread."""
@@ -63,17 +91,21 @@ class BvhMerger:
         src = Path(bvh_path)
         if not src.is_file():
             raise ValueError(f"BVH 文件不存在: {bvh_path}")
-        if not self._exe.is_file():
-            raise ValueError(f"未找到 {self._exe}")
+        prefix, env, must_exist = self._resolve_runner()
+        if must_exist is not None and not must_exist.is_file():
+            raise ValueError(
+                f"未找到 {must_exist}（也可以把 mocap_merge 源码放到 {self._source_dir}）"
+            )
         dest = folder_path / merged_copy_name(src)
         # dest may exist from an earlier run of this same feature: overwrite it.
         shutil.copy2(src, dest)
         self._log(f"[BVH融合] 已拷贝 {src.name} -> {dest}\n")
-        self._log(f"[BVH融合] 执行: {self._exe.name} {folder_path} --verbose\n")
+        self._log(f"[BVH融合] 执行: {' '.join(prefix)} {folder_path} --verbose\n")
         proc = subprocess.Popen(
-            build_merge_command(self._exe, folder_path),
+            prefix + [str(folder_path), "--verbose"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            env=env,
         )
         for raw in proc.stdout:
             self._log(decode_output(raw))

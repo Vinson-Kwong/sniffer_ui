@@ -3,6 +3,13 @@
 日期：2026-08-17
 状态：已批准（方案 A）
 
+> **2026-08-17 修订（杀毒误报）**：打包版 `mocap-merge.exe`（PyInstaller、无签名）
+> 被 Windows Defender 拦截。改为**源码优先**运行：开发环境下用
+> `python -m mocap_merge <文件夹> --verbose`（PYTHONPATH 指向 `merge_app/src`，
+> 源码从 github.com/Vinson-Kwong/mocap_merge 克隆）；仅当无解释器（PyInstaller
+> 打包的 sniffer_ui.exe）或源码缺失时回退到 exe。requirements.txt 相应新增
+> numpy/pyyaml。
+
 ## 目标
 
 在"数据拷贝删除"区块与"日志"区之间新增"BVH融合"区块：用户选择一个文件夹和一个
