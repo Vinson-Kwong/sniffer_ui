@@ -13,6 +13,7 @@ from core.net_info import list_local_ipv4
 from core.ssh_session import SSHSession
 from core.robot_controller import RobotController, binary_path_from_command
 from core.program_runner import ProgramRunner
+from core.bvh_merger import BvhMerger
 from ui.log_view import LogView
 
 ctk.set_appearance_mode("dark")
@@ -31,6 +32,8 @@ class App(ctk.CTk):
         self._connected = False
         self._mocap_dir = ""
         self._copying_data = False
+        self._merging = False
+        self._last_bvh_dir = ""
 
         self.session = SSHSession()
         self.controller = RobotController(
@@ -48,6 +51,7 @@ class App(ctk.CTk):
                 lambda path=path: self._set_mocap_dir(path)
             ),
         )
+        self.merger = BvhMerger(self._schedule, self._log)
 
         self._build_ui()
         ensure_default_config_file()
@@ -134,6 +138,20 @@ class App(ctk.CTk):
         self.copy_progress_label = ctk.CTkLabel(copy_row, text="0%", width=150)
         self.copy_progress_label.pack(side="left")
 
+        mergef = ctk.CTkFrame(self); mergef.pack(fill="x", padx=12, pady=6)
+        ctk.CTkLabel(mergef, text="BVH融合", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
+        m1 = ctk.CTkFrame(mergef, fg_color="transparent"); m1.pack(fill="x", **pad)
+        ctk.CTkLabel(m1, text="文件夹:").pack(side="left")
+        self.bvh_folder_entry = ctk.CTkEntry(m1, width=360); self.bvh_folder_entry.pack(side="left", padx=8)
+        ctk.CTkButton(m1, text="浏览", width=70, command=self.on_browse_bvh_folder).pack(side="left")
+        m2 = ctk.CTkFrame(mergef, fg_color="transparent"); m2.pack(fill="x", **pad)
+        ctk.CTkLabel(m2, text="BVH文件:").pack(side="left")
+        self.bvh_file_entry = ctk.CTkEntry(m2, width=360); self.bvh_file_entry.pack(side="left", padx=8)
+        ctk.CTkButton(m2, text="浏览", width=70, command=self.on_browse_bvh_file).pack(side="left")
+        m3 = ctk.CTkFrame(mergef, fg_color="transparent"); m3.pack(fill="x", **pad)
+        self.merge_btn = ctk.CTkButton(m3, text="融合", width=120, command=self.on_merge_bvh)
+        self.merge_btn.pack(side="left")
+
         ctk.CTkLabel(self, text="日志", font=ctk.CTkFont(size=13, weight="bold")).pack(anchor="w", padx=16, pady=(8, 0))
         self.log_view = LogView(self, height=240)
         self.log_view.pack(fill="both", expand=True, padx=12, pady=(4, 12))
@@ -176,6 +194,11 @@ class App(ctk.CTk):
         self.pw_entry.insert(0, cfg.get("password", "MangoTango"))
         self._last_dir = cfg.get("last_archive_dir", "")
         self.run_cmd_entry.insert(0, cfg.get("run_command", "cd ~/ats && sudo ./sniffer --bin"))
+        self.bvh_folder_entry.delete(0, "end")
+        self.bvh_folder_entry.insert(0, cfg.get("bvh_folder", ""))
+        self.bvh_file_entry.delete(0, "end")
+        self.bvh_file_entry.insert(0, cfg.get("bvh_file", ""))
+        self._last_bvh_dir = cfg.get("last_bvh_dir", "")
         self._refresh_local_ips(initial=cfg.get("local_ip", ""))
 
     def _refresh_local_ips(self, initial=""):
@@ -246,6 +269,9 @@ class App(ctk.CTk):
                 "password": self.pw_entry.get(),
                 "last_archive_dir": self._last_dir,
                 "run_command": self.run_cmd_entry.get(),
+                "bvh_folder": self.bvh_folder_entry.get(),
+                "bvh_file": self.bvh_file_entry.get(),
+                "last_bvh_dir": self._last_bvh_dir,
             })
         except Exception as e:
             self._log(f"[保存配置失败] {e}\n")
@@ -296,6 +322,7 @@ class App(ctk.CTk):
                                text="停止" if running else "运行")
         can_copy = self._connected and bool(self._mocap_dir) and not self._copying_data
         self.copy_btn.configure(state="normal" if can_copy else "disabled")
+        self.merge_btn.configure(state="disabled" if self._merging else "normal")
 
     # ---------------- handlers ----------------
     def on_browse(self):
@@ -307,6 +334,39 @@ class App(ctk.CTk):
             self.archive_entry.delete(0, "end")
             self.archive_entry.insert(0, path)
             self._last_dir = os.path.dirname(path)
+
+    def on_browse_bvh_folder(self):
+        path = filedialog.askdirectory(initialdir=self._last_bvh_dir or None)
+        if path:
+            self.bvh_folder_entry.delete(0, "end")
+            self.bvh_folder_entry.insert(0, path)
+            self._last_bvh_dir = path
+
+    def on_browse_bvh_file(self):
+        path = filedialog.askopenfilename(
+            initialdir=self._last_bvh_dir or None,
+            filetypes=[("BVH 文件", "*.bvh"), ("所有文件", "*.*")],
+        )
+        if path:
+            self.bvh_file_entry.delete(0, "end")
+            self.bvh_file_entry.insert(0, path)
+            self._last_bvh_dir = os.path.dirname(path)
+
+    def on_merge_bvh(self):
+        folder = self.bvh_folder_entry.get().strip()
+        bvh = self.bvh_file_entry.get().strip()
+        if not folder:
+            self._log("[BVH融合] 请先选择文件夹\n"); return
+        if not bvh:
+            self._log("[BVH融合] 请先选择 BVH 文件\n"); return
+        self._merging = True
+        self._refresh_controls()
+
+        def done(ok, error):
+            self._merging = False
+            self._refresh_controls()
+
+        self.merger.merge(folder, bvh, done)
 
     def on_connect(self):
         host = self.target_entry.get().strip()
