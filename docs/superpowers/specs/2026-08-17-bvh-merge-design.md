@@ -15,6 +15,14 @@
 > 结尾的文件名，导致 `missing required input: optical BDX.bvh`）。经确认改为：
 > **拷贝保留原文件名**，同名旧拷贝视为同一逻辑输入的过期副本，直接覆盖；
 > 工具输出本来就是 `<文件夹名>_merge.bvh`，不会与输入冲突。
+>
+> **2026-08-17 修订三（打包版进程内运行）**：Defender 同样拦截新编译的未签名
+> sniffer_ui.exe 的执行，打包版无法依赖旁置 exe。冻结构建改为把 mocap_merge
+> 源码与模板（sample.bvh、bdx_v4.urdf → `<_MEIPASS>/data`）打进包内，
+> BVH融合在**进程内**直接调用 `mocap_merge.cli.main()`（stdout/stderr 重定向
+> 到日志）。运行器选择顺序：本地源码子进程 `python -m`（开发，隔离崩溃）→
+> 进程内调用（打包版/已安装）→ 旁置 exe（最后手段）。sniffer_ui.spec 用
+> `pathex=merge_app/src` 解析延迟导入（editable 安装对 PyInstaller 不可见）。
 
 ## 目标
 

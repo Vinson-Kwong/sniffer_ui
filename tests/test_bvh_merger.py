@@ -79,8 +79,11 @@ def merger(tmp_path):
     def schedule(fn):
         fn()  # run callbacks inline: tests are single-threaded
 
+    # allow_inprocess=False keeps these tests on the exe path even when the
+    # real mocap_merge package is installed in this interpreter.
     return BvhMerger(schedule, logs.append, exe_path=exe,
-                     source_dir=tmp_path / "no-src"), logs
+                     source_dir=tmp_path / "no-src",
+                     allow_inprocess=False), logs
 
 
 def _make_source(tmp_path, name="take.bvh", content=b"MOTION Frames 1"):
@@ -141,7 +144,8 @@ def test_merge_sync_validates_inputs(merger, tmp_path):
         m._merge_sync(str(folder), str(tmp_path / "missing.bvh"))
     missing_exe = BvhMerger(lambda fn: fn(), lambda s: None,
                             exe_path=tmp_path / "nope.exe",
-                            source_dir=tmp_path / "no-src")
+                            source_dir=tmp_path / "no-src",
+                            allow_inprocess=False)
     with pytest.raises(ValueError, match="未找到"):
         missing_exe._merge_sync(str(folder), str(src))
 
@@ -153,6 +157,77 @@ def _make_source_dir(root: Path) -> Path:
     (src / "mocap_merge").mkdir(parents=True)
     (src / "mocap_merge" / "__init__.py").write_bytes(b"")
     return src
+
+
+class _FakeCli:
+    calls = []
+
+    def main(self, argv):
+        _FakeCli.calls.append(argv)
+        return 0
+
+
+def test_runner_kind_prefers_subprocess_when_source_present(merger, tmp_path):
+    m, _logs = merger  # allow_inprocess=False, but source wins first
+    m._source_dir = _make_source_dir(tmp_path)
+    assert m._runner_kind() == "python-subprocess"
+
+
+def test_runner_kind_inprocess_when_no_source_but_importable(tmp_path, monkeypatch):
+    m = BvhMerger(lambda fn: fn(), lambda s: None,
+                  exe_path=tmp_path / "nope.exe",
+                  source_dir=tmp_path / "no-src")
+    monkeypatch.setattr("core.bvh_merger._import_cli", lambda: _FakeCli())
+    assert m._runner_kind() == "inprocess"
+
+
+def test_runner_kind_exe_when_not_importable_or_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr("core.bvh_merger._import_cli", lambda: None)
+    m = BvhMerger(lambda fn: fn(), lambda s: None,
+                  exe_path=tmp_path / "nope.exe",
+                  source_dir=tmp_path / "no-src")
+    assert m._runner_kind() == "exe"
+
+    m2 = BvhMerger(lambda fn: fn(), lambda s: None,
+                   exe_path=tmp_path / "nope.exe",
+                   source_dir=tmp_path / "no-src",
+                   allow_inprocess=False)
+    monkeypatch.setattr("core.bvh_merger._import_cli", lambda: _FakeCli())
+    assert m2._runner_kind() == "exe"
+
+
+def test_runner_kind_inprocess_when_frozen(tmp_path, monkeypatch):
+    # frozen: no interpreter for subprocess mode, but the bundled package
+    # (hiddenimport) is importable -> in-process
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr("core.bvh_merger._import_cli", lambda: _FakeCli())
+    m = BvhMerger(lambda fn: fn(), lambda s: None,
+                  exe_path=tmp_path / "nope.exe",
+                  source_dir=_make_source_dir(tmp_path))
+    assert m._runner_kind() == "inprocess"
+
+
+def test_merge_sync_inprocess_runs_cli_and_surfaces_missing_input_error(tmp_path):
+    """Integration: real installed mocap_merge, executed in-process on an
+    empty folder. Errors must reach the log; no subprocess involved."""
+    logs = []
+    m = BvhMerger(lambda fn: fn(), logs.append,
+                  exe_path=tmp_path / "nope.exe",
+                  source_dir=tmp_path / "no-src")
+    if m._runner_kind() != "inprocess":
+        pytest.skip("mocap_merge not installed in this interpreter")
+    src = _make_source(tmp_path)
+    folder = tmp_path / "data"
+    folder.mkdir()
+
+    with pytest.raises(RuntimeError, match="退出码=1"):
+        m._merge_sync(str(folder), str(src))
+
+    # the copy happened before the tool ran
+    assert (folder / "take.bvh").read_bytes() == b"MOTION Frames 1"
+    assert any("missing required input" in line for line in logs)
+    assert any("进程内" in line for line in logs)
+    assert any("退出码=1" in line for line in logs)
 
 
 def test_resolve_runner_prefers_source_with_pythonpath(merger, tmp_path):

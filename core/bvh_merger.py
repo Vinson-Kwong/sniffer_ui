@@ -1,10 +1,12 @@
 """Local BVH merge: copy the selected bvh into a folder under its original
 name, then run mocap-merge on the folder and stream its output.
 
-Runner selection (AV false positives hit the packed exe): prefer running the
-mocap_merge source via `python -m mocap_merge` with PYTHONPATH pointing at
-merge_app/src; fall back to merge_app/mocap-merge.exe (frozen builds, or when
-the source tree is absent)."""
+Runner selection (AV false positives hit the packed exe):
+- dev with merge_app/src present: `python -m mocap_merge` subprocess
+  (isolation: a tool crash cannot take the UI down)
+- package importable (bundled into the frozen exe): call cli.main() in-process
+- last resort: merge_app/mocap-merge.exe subprocess"""
+import contextlib
 import os
 import shutil
 import subprocess
@@ -41,6 +43,35 @@ def build_merge_command(exe_path, folder) -> list:
     return [str(exe_path), str(folder), "--verbose"]
 
 
+def _import_cli():
+    """The installed/bundled mocap_merge.cli, or None when not importable."""
+    try:
+        from mocap_merge import cli
+    except Exception:
+        return None
+    return cli
+
+
+class _LogStream:
+    """file-like adapter routing print()/traceback output to the log callback."""
+
+    def __init__(self, log):
+        self._log = log
+        self._buf = ""
+
+    def write(self, text):
+        self._buf += text
+        while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._log(line + "\n")
+        return len(text)
+
+    def flush(self):
+        if self._buf:
+            self._log(self._buf + "\n")
+            self._buf = ""
+
+
 def decode_output(raw: bytes) -> str:
     """mocap-merge may print UTF-8 or GBK (Chinese Windows); never crash."""
     for enc in ("utf-8", "gbk"):
@@ -55,26 +86,52 @@ class BvhMerger:
     """Copies the bvh into the folder under its original name, then runs
     mocap-merge on the folder, streaming output through `log`."""
 
-    def __init__(self, schedule, log, exe_path=None, source_dir=None):
+    def __init__(self, schedule, log, exe_path=None, source_dir=None,
+                 allow_inprocess=True):
         self._schedule = schedule
         self._log = log
         self._exe = Path(exe_path) if exe_path else merge_app_exe_path()
         self._source_dir = Path(source_dir) if source_dir else mocap_merge_source_dir()
+        self._allow_inprocess = allow_inprocess
+
+    def _has_local_source(self) -> bool:
+        if getattr(sys, "frozen", False):
+            return False  # no interpreter next to a frozen app
+        return (self._source_dir / "mocap_merge" / "__init__.py").is_file()
+
+    def _runner_kind(self) -> str:
+        """'python-subprocess' | 'inprocess' | 'exe'."""
+        if self._has_local_source():
+            return "python-subprocess"
+        if self._allow_inprocess and _import_cli() is not None:
+            return "inprocess"
+        return "exe"
 
     def _resolve_runner(self):
-        """(command_prefix, extra_env, must_exist_path_or_None).
-
-        Source mode runs `python -m mocap_merge` — no packed exe for AV
-        heuristics to flag. Only in a dev/source run; a frozen app has no
-        interpreter, so it always uses the exe."""
-        if not getattr(sys, "frozen", False) and \
-                (self._source_dir / "mocap_merge" / "__init__.py").is_file():
+        """(command_prefix, extra_env, must_exist_path_or_None) — subprocess
+        runners only."""
+        if self._has_local_source():
             env = dict(os.environ)
             old = env.get("PYTHONPATH")
             env["PYTHONPATH"] = f"{self._source_dir}{os.pathsep}{old}" if old \
                 else str(self._source_dir)
             return [sys.executable, "-m", "mocap_merge"], env, None
         return [str(self._exe)], None, self._exe
+
+    def _run_inprocess(self, folder_path) -> int:
+        """Run mocap_merge.cli.main() inside this process (frozen builds:
+        the package is bundled, so no exe and no interpreter are needed)."""
+        cli = _import_cli()
+        self._log(f"[BVH融合] 执行: mocap_merge.cli.main {folder_path} --verbose（进程内）\n")
+        try:
+            with contextlib.redirect_stdout(_LogStream(self._log)), \
+                    contextlib.redirect_stderr(_LogStream(self._log)):
+                return cli.main([str(folder_path), "--verbose"])
+        except SystemExit as e:  # argparse --help / bad args
+            return e.code if isinstance(e.code, int) else 1
+        except Exception as e:
+            self._log(f"{type(e).__name__}: {e}\n")
+            return 1
 
     def merge(self, folder, bvh_path, on_done):
         """Async entry point from the UI thread."""
@@ -95,26 +152,33 @@ class BvhMerger:
         src = Path(bvh_path)
         if not src.is_file():
             raise ValueError(f"BVH 文件不存在: {bvh_path}")
-        prefix, env, must_exist = self._resolve_runner()
-        if must_exist is not None and not must_exist.is_file():
+        kind = self._runner_kind()
+        if kind == "exe" and not self._exe.is_file():
             raise ValueError(
-                f"未找到 {must_exist}（也可以把 mocap_merge 源码放到 {self._source_dir}）"
+                f"未找到 {self._exe}（也可以 pip 安装 mocap_merge，"
+                f"或把源码放到 {self._source_dir}）"
             )
         dest = folder_path / copy_dest_name(src)
         # dest may be a stale copy from an earlier run of this feature:
         # overwriting it is an update of the same logical input.
         shutil.copy2(src, dest)
         self._log(f"[BVH融合] 已拷贝 {src.name} -> {dest}\n")
-        self._log(f"[BVH融合] 执行: {' '.join(prefix)} {folder_path} --verbose\n")
-        proc = subprocess.Popen(
-            prefix + [str(folder_path), "--verbose"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-        for raw in proc.stdout:
-            self._log(decode_output(raw))
-        code = proc.wait()
+
+        if kind == "inprocess":
+            code = self._run_inprocess(folder_path)
+        else:
+            prefix, env, _must_exist = self._resolve_runner()
+            self._log(f"[BVH融合] 执行: {' '.join(prefix)} {folder_path} --verbose\n")
+            proc = subprocess.Popen(
+                prefix + [str(folder_path), "--verbose"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+            for raw in proc.stdout:
+                self._log(decode_output(raw))
+            code = proc.wait()
+
         self._log(f"[BVH融合] 退出码={code}\n")
         if code != 0:
             raise RuntimeError(f"mocap-merge 退出码={code}")

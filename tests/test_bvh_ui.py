@@ -57,7 +57,10 @@ def test_merge_button_disabled_while_merging():
 def test_on_merge_bvh_requires_both_paths_and_stays_idle():
     a = _fresh_app()
     try:
-        a.on_merge_bvh()          # both entries empty
+        # clear entries: this machine's config.json may carry real saved paths
+        a.bvh_folder_entry.delete(0, "end")
+        a.bvh_file_entry.delete(0, "end")
+        a.on_merge_bvh()          # both entries now empty
         a._poll()                 # drain scheduled log callback
         assert a._merging is False
         assert "请先选择文件夹" in a.log_view.get("1.0", "end")
