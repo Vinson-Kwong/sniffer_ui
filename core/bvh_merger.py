@@ -11,6 +11,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 from pathlib import Path
 
@@ -37,6 +39,24 @@ def copy_dest_name(bvh_path) -> str:
     (*BDX.bvh / *BDX0709.bvh), so renaming the copy would hide it from
     the tool. A same-named stale copy is simply overwritten."""
     return Path(bvh_path).name
+
+
+ARCHIVE_SUFFIXES = (".tar.gz", ".tgz")
+
+
+def is_supported_archive(path) -> bool:
+    """数据拷贝产出 tar.gz（远端 tar -czf）；BVH融合只接受这一族压缩包。"""
+    return str(path).lower().endswith(ARCHIVE_SUFFIXES)
+
+
+def merge_dir_in_extracted(root: Path) -> Path:
+    """The folder mocap-merge runs on inside a fresh extraction `root`:
+    the single top-level directory (数据拷贝 packs with -C <parent> <name>),
+    or `root` itself for flat archives of loose files."""
+    entries = list(root.iterdir())
+    if len(entries) == 1 and entries[0].is_dir():
+        return entries[0]
+    return root
 
 
 def build_merge_command(exe_path, folder) -> list:

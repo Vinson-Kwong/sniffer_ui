@@ -5,6 +5,8 @@ from core.bvh_merger import (
     build_merge_command,
     copy_dest_name,
     decode_output,
+    is_supported_archive,
+    merge_dir_in_extracted,
     merge_app_exe_path,
 )
 
@@ -14,6 +16,34 @@ def test_copy_dest_name_keeps_original_name():
     # (*BDX.bvh / *BDX0709.bvh), so the copy must keep the original name.
     assert copy_dest_name("D:/take.bvh") == "take.bvh"
     assert copy_dest_name(Path("C:/x/BDX_0817fang1-BDX0709.bvh")) == "BDX_0817fang1-BDX0709.bvh"
+
+
+def test_is_supported_archive_accepts_tar_gz_family_only():
+    assert is_supported_archive("D:/data-abc.tar.gz") is True
+    assert is_supported_archive("D:/data.tgz") is True
+    assert is_supported_archive("D:/DATA.TAR.GZ") is True  # case-insensitive
+    assert is_supported_archive("D:/data.zip") is False
+    assert is_supported_archive("D:/data.tar") is False
+    assert is_supported_archive("D:/take.bvh") is False
+    assert is_supported_archive("") is False
+
+
+def test_merge_dir_in_extracted_picks_single_top_level_dir(tmp_path):
+    # 数据拷贝打包结构: tar -czf <pkg> -C <父目录> <目录名> -> 单顶层目录
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "x8.bin").write_bytes(b"x")
+    assert merge_dir_in_extracted(tmp_path) == tmp_path / "data"
+
+
+def test_merge_dir_in_extracted_falls_back_to_root_for_loose_files(tmp_path):
+    (tmp_path / "a.bvh").write_bytes(b"a")
+    (tmp_path / "b.bin").write_bytes(b"b")
+    assert merge_dir_in_extracted(tmp_path) == tmp_path
+
+
+def test_merge_dir_in_extracted_single_file_falls_back_to_root(tmp_path):
+    (tmp_path / "a.bvh").write_bytes(b"a")
+    assert merge_dir_in_extracted(tmp_path) == tmp_path
 
 
 def test_build_merge_command_is_folder_then_verbose():
