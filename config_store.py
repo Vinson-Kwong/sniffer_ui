@@ -13,7 +13,7 @@ DEFAULTS = {
     "password": "MangoTango",
     "last_archive_dir": "",
     "run_command": "cd ~/ats && sudo ./sniffer --bin",
-    "bvh_folder": "",
+    "bvh_archive": "",
     "bvh_file": "",
     "last_bvh_dir": "",
 }

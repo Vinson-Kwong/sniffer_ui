@@ -13,7 +13,7 @@ from core.net_info import list_local_ipv4
 from core.ssh_session import SSHSession
 from core.robot_controller import RobotController, binary_path_from_command
 from core.program_runner import ProgramRunner
-from core.bvh_merger import BvhMerger
+from core.bvh_merger import BvhMerger, is_supported_archive
 from ui.log_view import LogView
 
 ctk.set_appearance_mode("dark")
@@ -141,9 +141,9 @@ class App(ctk.CTk):
         mergef = ctk.CTkFrame(self); mergef.pack(fill="x", padx=12, pady=6)
         ctk.CTkLabel(mergef, text="BVH融合", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
         m1 = ctk.CTkFrame(mergef, fg_color="transparent"); m1.pack(fill="x", **pad)
-        ctk.CTkLabel(m1, text="文件夹:").pack(side="left")
-        self.bvh_folder_entry = ctk.CTkEntry(m1, width=360); self.bvh_folder_entry.pack(side="left", padx=8)
-        ctk.CTkButton(m1, text="浏览", width=70, command=self.on_browse_bvh_folder).pack(side="left")
+        ctk.CTkLabel(m1, text="压缩包:").pack(side="left")
+        self.bvh_archive_entry = ctk.CTkEntry(m1, width=360); self.bvh_archive_entry.pack(side="left", padx=8)
+        ctk.CTkButton(m1, text="浏览", width=70, command=self.on_browse_bvh_archive).pack(side="left")
         m2 = ctk.CTkFrame(mergef, fg_color="transparent"); m2.pack(fill="x", **pad)
         ctk.CTkLabel(m2, text="BVH文件:").pack(side="left")
         self.bvh_file_entry = ctk.CTkEntry(m2, width=360); self.bvh_file_entry.pack(side="left", padx=8)
@@ -194,8 +194,8 @@ class App(ctk.CTk):
         self.pw_entry.insert(0, cfg.get("password", "MangoTango"))
         self._last_dir = cfg.get("last_archive_dir", "")
         self.run_cmd_entry.insert(0, cfg.get("run_command", "cd ~/ats && sudo ./sniffer --bin"))
-        self.bvh_folder_entry.delete(0, "end")
-        self.bvh_folder_entry.insert(0, cfg.get("bvh_folder", ""))
+        self.bvh_archive_entry.delete(0, "end")
+        self.bvh_archive_entry.insert(0, cfg.get("bvh_archive", ""))
         self.bvh_file_entry.delete(0, "end")
         self.bvh_file_entry.insert(0, cfg.get("bvh_file", ""))
         self._last_bvh_dir = cfg.get("last_bvh_dir", "")
@@ -269,7 +269,7 @@ class App(ctk.CTk):
                 "password": self.pw_entry.get(),
                 "last_archive_dir": self._last_dir,
                 "run_command": self.run_cmd_entry.get(),
-                "bvh_folder": self.bvh_folder_entry.get(),
+                "bvh_archive": self.bvh_archive_entry.get(),
                 "bvh_file": self.bvh_file_entry.get(),
                 "last_bvh_dir": self._last_bvh_dir,
             })
@@ -335,12 +335,15 @@ class App(ctk.CTk):
             self.archive_entry.insert(0, path)
             self._last_dir = os.path.dirname(path)
 
-    def on_browse_bvh_folder(self):
-        path = filedialog.askdirectory(initialdir=self._last_bvh_dir or None)
+    def on_browse_bvh_archive(self):
+        path = filedialog.askopenfilename(
+            initialdir=self._last_bvh_dir or None,
+            filetypes=[("压缩包", "*.tar.gz *.tgz")],
+        )
         if path:
-            self.bvh_folder_entry.delete(0, "end")
-            self.bvh_folder_entry.insert(0, path)
-            self._last_bvh_dir = path
+            self.bvh_archive_entry.delete(0, "end")
+            self.bvh_archive_entry.insert(0, path)
+            self._last_bvh_dir = os.path.dirname(path)
 
     def on_browse_bvh_file(self):
         path = filedialog.askopenfilename(
@@ -353,10 +356,14 @@ class App(ctk.CTk):
             self._last_bvh_dir = os.path.dirname(path)
 
     def on_merge_bvh(self):
-        folder = self.bvh_folder_entry.get().strip()
+        archive = self.bvh_archive_entry.get().strip()
         bvh = self.bvh_file_entry.get().strip()
-        if not folder:
-            self._log("[BVH融合] 请先选择文件夹\n"); return
+        if not archive:
+            self._log("[BVH融合] 请先选择压缩包(tar.gz)\n"); return
+        if not os.path.isfile(archive):
+            self._log(f"[BVH融合] 压缩包不存在: {archive}\n"); return
+        if not is_supported_archive(archive):
+            self._log(f"[BVH融合] 仅支持 tar.gz/tgz 压缩包: {archive}\n"); return
         if not bvh:
             self._log("[BVH融合] 请先选择 BVH 文件\n"); return
         self._merging = True
@@ -366,7 +373,7 @@ class App(ctk.CTk):
             self._merging = False
             self._refresh_controls()
 
-        self.merger.merge(folder, bvh, done)
+        self.merger.merge(archive, bvh, done)
 
     def on_connect(self):
         host = self.target_entry.get().strip()
