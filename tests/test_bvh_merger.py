@@ -70,6 +70,7 @@ def test_decode_output_replaces_undecodable_bytes():
 # ---- BvhMerger ----
 import os
 import sys
+import tarfile
 import threading
 
 import pytest
@@ -78,14 +79,18 @@ from core.bvh_merger import BvhMerger
 
 
 def make_fake_exe(directory: Path) -> Path:
-    """A stand-in mocap exe: echoes its first arg; exits 3 if a FAIL file
-    sits inside the target folder (how tests request a failing run)."""
+    """A stand-in mocap exe: echoes its first arg, cats the copied-in
+    take.bvh (so tests can see WHICH copy the tool saw), writes the
+    <folder>_merge.bvh product, exits 3 if a FAIL file sits inside the
+    target folder."""
     if os.name == "nt":
         exe = directory / "fake-mocap-merge.bat"
         exe.write_bytes(
             b"@echo off\r\n"
-            b"if \"%~2\"==\"--verbose\" echo merge-ok %~1\r\n"
             b"if exist \"%~1\\FAIL\" exit /b 3\r\n"
+            b"if \"%~2\"==\"--verbose\" echo merge-ok %~1\r\n"
+            b"type \"%~1\\take.bvh\" 2>nul\r\n"
+            b"copy nul \"%~1\\%~n1_merge.bvh\" >nul\r\n"
             b"exit /b 0\r\n"
         )
         return exe
@@ -94,6 +99,8 @@ def make_fake_exe(directory: Path) -> Path:
         '#!/bin/sh\n'
         'if [ -f "$1/FAIL" ]; then exit 3; fi\n'
         'if [ "$2" = "--verbose" ]; then echo "merge-ok $1"; fi\n'
+        'cat "$1/take.bvh" 2>/dev/null\n'
+        ': > "$1/$(basename "$1")_merge.bvh"\n'
         'exit 0\n',
         encoding="ascii",
     )
@@ -122,62 +129,127 @@ def _make_source(tmp_path, name="take.bvh", content=b"MOTION Frames 1"):
     return src
 
 
-def test_merge_sync_copies_bvh_under_original_name_and_runs_exe(merger, tmp_path):
+def _make_archive(tmp_path, folder_name="data", files=None) -> Path:
+    """Pack tmp_path/folder_name (+files dict) into tmp_path/<folder_name>.tar.gz,
+    mirroring 数据拷贝's `tar -czf <pkg> -C <parent> <name>` single top-level dir."""
+    folder = tmp_path / folder_name
+    folder.mkdir(parents=True, exist_ok=True)
+    for name, content in (files or {}).items():
+        (folder / name).write_bytes(content)
+    archive = tmp_path / f"{folder_name}.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(folder, arcname=folder_name)
+    return archive
+
+
+def _temp_folder_from_logs(logs) -> Path:
+    """The 融合文件夹 path the merger logged (the temp dir is gone by the
+    time the assertion runs, so we can only recover it from the log)."""
+    line = next(l for l in logs if "融合文件夹" in l)
+    return Path(line.split(":", 1)[1].strip())
+
+
+def test_merge_sync_extracts_archive_copies_bvh_and_runs_exe(merger, tmp_path):
     m, logs = merger
     src = _make_source(tmp_path)
-    folder = tmp_path / "data"
-    folder.mkdir()
+    archive = _make_archive(tmp_path, "data", {"optical-BDX.bvh": b"optical"})
 
-    m._merge_sync(str(folder), str(src))
+    m._merge_sync(str(archive), str(src))
 
-    copied = folder / "take.bvh"
-    assert copied.read_bytes() == b"MOTION Frames 1"
+    assert (tmp_path / "data_merge.bvh").is_file(), \
+        f"product not copied next to the archive: {logs}"
+    assert any("解压" in line for line in logs)
+    assert any("融合文件夹" in line for line in logs)
     assert any("已拷贝" in line for line in logs)
     assert any("merge-ok" in line for line in logs), f"exe output not streamed: {logs}"
     assert any("退出码=0" in line for line in logs)
+    assert any("产物已保存" in line for line in logs)
     assert any("完成" in line for line in logs)
 
 
-def test_merge_sync_overwrites_stale_same_name_copy(merger, tmp_path):
+def test_merge_sync_overwrites_stale_same_name_copy_inside_archive(merger, tmp_path):
+    m, logs = merger
+    src = _make_source(tmp_path, content=b"new-content")
+    archive = _make_archive(tmp_path, "data", {"take.bvh": b"old"})  # stale copy
+
+    m._merge_sync(str(archive), str(src))
+
+    # the fake exe cats the copied-in take.bvh: the tool saw the fresh copy
+    assert "new-content" in "".join(logs)
+
+
+def test_merge_sync_overwrites_stale_product_next_to_archive(merger, tmp_path):
     m, _logs = merger
-    src = _make_source(tmp_path, content=b"new")
-    folder = tmp_path / "data"
-    folder.mkdir()
-    (folder / "take.bvh").write_bytes(b"old")  # stale copy from a previous run
+    src = _make_source(tmp_path)
+    archive = _make_archive(tmp_path, "data", {"x8.bin": b"x"})
+    (tmp_path / "data_merge.bvh").write_bytes(b"stale product")
 
-    m._merge_sync(str(folder), str(src))
+    m._merge_sync(str(archive), str(src))
 
-    assert (folder / "take.bvh").read_bytes() == b"new"
+    assert (tmp_path / "data_merge.bvh").read_bytes() == b""  # replaced by fresh product
 
 
-def test_merge_sync_raises_on_exe_failure(merger, tmp_path):
+def test_merge_sync_cleans_up_temp_dir(merger, tmp_path):
     m, logs = merger
     src = _make_source(tmp_path)
-    folder = tmp_path / "data"
-    folder.mkdir()
-    (folder / "FAIL").write_bytes(b"")  # ask the fake exe to exit 3
+    archive = _make_archive(tmp_path, "data", {})
+
+    m._merge_sync(str(archive), str(src))
+
+    temp_folder = _temp_folder_from_logs(logs)
+    assert temp_folder.parent.name.startswith("bvh-merge-")
+    assert not temp_folder.parent.exists()  # whole temp root removed
+
+
+def test_merge_sync_raises_on_exe_failure_and_cleans_up(merger, tmp_path):
+    m, logs = merger
+    src = _make_source(tmp_path)
+    archive = _make_archive(tmp_path, "data", {"FAIL": b""})  # ask exe to exit 3
 
     with pytest.raises(RuntimeError, match="退出码=3"):
-        m._merge_sync(str(folder), str(src))
+        m._merge_sync(str(archive), str(src))
     assert any("退出码=3" in line for line in logs)
+    assert not _temp_folder_from_logs(logs).parent.exists()
+    # a failed merge must not leave a product next to the archive
+    assert not (tmp_path / "data_merge.bvh").exists()
+
+
+def test_merge_sync_uses_extraction_root_for_flat_archive(merger, tmp_path):
+    m, logs = merger
+    src = _make_source(tmp_path)
+    archive = tmp_path / "flat.tar.gz"
+    staging = tmp_path / "staging"; staging.mkdir()
+    (staging / "optical-BDX.bvh").write_bytes(b"o")
+    (staging / "x8.bin").write_bytes(b"x")
+    with tarfile.open(archive, "w:gz") as tar:
+        tar.add(staging / "optical-BDX.bvh", arcname="optical-BDX.bvh")
+        tar.add(staging / "x8.bin", arcname="x8.bin")
+
+    m._merge_sync(str(archive), str(src))
+
+    folder = _temp_folder_from_logs(logs)
+    assert folder.name.startswith("bvh-merge-")  # the extraction root itself
+    assert (tmp_path / f"{folder.name}_merge.bvh").is_file()
 
 
 def test_merge_sync_validates_inputs(merger, tmp_path):
     m, _logs = merger
     src = _make_source(tmp_path)
-    folder = tmp_path / "data"
-    folder.mkdir()
+    good = _make_archive(tmp_path, "data", {})
+    zip_like = tmp_path / "data.zip"; zip_like.write_bytes(b"PK")
 
-    with pytest.raises(ValueError, match="文件夹不存在"):
-        m._merge_sync(str(tmp_path / "missing"), str(src))
+    with pytest.raises(ValueError, match="压缩包不存在"):
+        m._merge_sync(str(tmp_path / "missing.tar.gz"), str(src))
+    with pytest.raises(ValueError, match="仅支持 tar.gz/tgz"):
+        m._merge_sync(str(zip_like), str(src))
     with pytest.raises(ValueError, match="BVH 文件不存在"):
-        m._merge_sync(str(folder), str(tmp_path / "missing.bvh"))
+        m._merge_sync(str(good), str(tmp_path / "missing.bvh"))
     missing_exe = BvhMerger(lambda fn: fn(), lambda s: None,
                             exe_path=tmp_path / "nope.exe",
                             source_dir=tmp_path / "no-src",
                             allow_inprocess=False)
     with pytest.raises(ValueError, match="未找到"):
-        missing_exe._merge_sync(str(folder), str(src))
+        missing_exe._merge_sync(str(good), str(src))
 
 
 # ---- source-run mode (AV-safe: python -m mocap_merge, no packed exe) ----
@@ -239,7 +311,7 @@ def test_runner_kind_inprocess_when_frozen(tmp_path, monkeypatch):
 
 def test_merge_sync_inprocess_runs_cli_and_surfaces_missing_input_error(tmp_path):
     """Integration: real installed mocap_merge, executed in-process on an
-    empty folder. Errors must reach the log; no subprocess involved."""
+    empty extracted folder. Errors must reach the log; no subprocess involved."""
     logs = []
     m = BvhMerger(lambda fn: fn(), logs.append,
                   exe_path=tmp_path / "nope.exe",
@@ -247,14 +319,12 @@ def test_merge_sync_inprocess_runs_cli_and_surfaces_missing_input_error(tmp_path
     if m._runner_kind() != "inprocess":
         pytest.skip("mocap_merge not installed in this interpreter")
     src = _make_source(tmp_path)
-    folder = tmp_path / "data"
-    folder.mkdir()
+    archive = _make_archive(tmp_path, "data", {})
 
     with pytest.raises(RuntimeError, match="退出码=1"):
-        m._merge_sync(str(folder), str(src))
+        m._merge_sync(str(archive), str(src))
 
-    # the copy happened before the tool ran
-    assert (folder / "take.bvh").read_bytes() == b"MOTION Frames 1"
+    assert any("已拷贝" in line for line in logs)  # copy happened before the tool ran
     assert any("missing required input" in line for line in logs)
     assert any("进程内" in line for line in logs)
     assert any("退出码=1" in line for line in logs)
@@ -295,8 +365,7 @@ def test_resolve_runner_uses_exe_when_frozen(merger, tmp_path, monkeypatch):
 
 def test_merge_sync_runs_real_source_and_surfaces_missing_input_error(tmp_path):
     """Integration: run the real mocap_merge source (repo merge_app/src) via
-    python -m on an empty folder. The tool must fail VISIBLY (traceback in the
-    log, nonzero exit) — the packed exe failed silently / was AV-blocked."""
+    python -m on an empty extracted folder."""
     repo_src = Path(__file__).resolve().parent.parent / "merge_app" / "src"
     if not (repo_src / "mocap_merge" / "__init__.py").is_file():
         pytest.skip("mocap_merge source not cloned")
@@ -304,15 +373,12 @@ def test_merge_sync_runs_real_source_and_surfaces_missing_input_error(tmp_path):
     m = BvhMerger(lambda fn: fn(), logs.append, exe_path=tmp_path / "nope.exe",
                   source_dir=repo_src)
     src = _make_source(tmp_path)
-    folder = tmp_path / "data"
-    folder.mkdir()
+    archive = _make_archive(tmp_path, "data", {})
 
     with pytest.raises(RuntimeError, match="退出码=1"):
-        m._merge_sync(str(folder), str(src))
+        m._merge_sync(str(archive), str(src))
 
-    # the copy happened before the tool ran
-    assert (folder / "take.bvh").read_bytes() == b"MOTION Frames 1"
-    # the tool's own error is visible in the log (no more silent failure)
+    assert any("已拷贝" in line for line in logs)
     assert any("missing required input" in line for line in logs)
     assert any("退出码=1" in line for line in logs)
 
@@ -327,8 +393,8 @@ def test_merge_reports_failure_through_on_done(merger, tmp_path):
         results.append((ok, error))
         done.set()
 
-    m.merge(str(tmp_path / "missing"), str(tmp_path / "x.bvh"), on_done)
+    m.merge(str(tmp_path / "missing.tar.gz"), str(tmp_path / "x.bvh"), on_done)
     assert done.wait(timeout=5)
     ok, error = results[0]
     assert ok is False
-    assert "文件夹不存在" in error
+    assert "压缩包不存在" in error

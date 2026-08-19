@@ -1,5 +1,7 @@
-"""Local BVH merge: copy the selected bvh into a folder under its original
-name, then run mocap-merge on the folder and stream its output.
+"""Local BVH merge: extract the selected tar.gz archive to a temp dir,
+copy the selected bvh in under its original name, run mocap-merge on the
+extracted folder, then move the resulting <folder>_merge.bvh next to the
+archive and clean up, streaming the tool's output.
 
 Runner selection (AV false positives hit the packed exe):
 - dev with merge_app/src present: `python -m mocap_merge` subprocess
@@ -103,8 +105,10 @@ def decode_output(raw: bytes) -> str:
 
 
 class BvhMerger:
-    """Copies the bvh into the folder under its original name, then runs
-    mocap-merge on the folder, streaming output through `log`."""
+    """Extracts the tar.gz archive, copies the bvh in under its original
+    name, runs mocap-merge on the extracted folder, copies the resulting
+    <folder>_merge.bvh next to the archive, and cleans up the temp dir —
+    streaming output through `log`."""
 
     def __init__(self, schedule, log, exe_path=None, source_dir=None,
                  allow_inprocess=True):
@@ -153,11 +157,12 @@ class BvhMerger:
             self._log(f"{type(e).__name__}: {e}\n")
             return 1
 
-    def merge(self, folder, bvh_path, on_done):
+    def merge(self, archive, bvh_path, on_done):
         """Async entry point from the UI thread."""
+
         def work():
             try:
-                self._merge_sync(folder, bvh_path)
+                self._merge_sync(archive, bvh_path)
                 self._schedule(lambda: on_done(ok=True, error=None))
             except Exception as e:
                 msg = str(e)  # bind before the lambda (except target is cleared on exit)
@@ -165,10 +170,12 @@ class BvhMerger:
                 self._schedule(lambda: on_done(ok=False, error=msg))
         threading.Thread(target=work, daemon=True).start()
 
-    def _merge_sync(self, folder, bvh_path):
-        folder_path = Path(folder)
-        if not folder_path.is_dir():
-            raise ValueError(f"文件夹不存在: {folder}")
+    def _merge_sync(self, archive_path, bvh_path):
+        archive = Path(archive_path)
+        if not archive.is_file():
+            raise ValueError(f"压缩包不存在: {archive_path}")
+        if not is_supported_archive(archive):
+            raise ValueError(f"仅支持 tar.gz/tgz 压缩包: {archive_path}")
         src = Path(bvh_path)
         if not src.is_file():
             raise ValueError(f"BVH 文件不存在: {bvh_path}")
@@ -178,28 +185,41 @@ class BvhMerger:
                 f"未找到 {self._exe}（也可以 pip 安装 mocap_merge，"
                 f"或把源码放到 {self._source_dir}）"
             )
-        dest = folder_path / copy_dest_name(src)
-        # dest may be a stale copy from an earlier run of this feature:
-        # overwriting it is an update of the same logical input.
-        shutil.copy2(src, dest)
-        self._log(f"[BVH融合] 已拷贝 {src.name} -> {dest}\n")
+        with tempfile.TemporaryDirectory(prefix="bvh-merge-") as tmp:
+            extract_root = Path(tmp)
+            self._log(f"[BVH融合] 解压 {archive.name} → 临时目录\n")
+            with tarfile.open(archive, mode="r:gz") as tar:
+                tar.extractall(extract_root, filter="data")
+            folder_path = merge_dir_in_extracted(extract_root)
+            self._log(f"[BVH融合] 融合文件夹: {folder_path}\n")
+            dest = folder_path / copy_dest_name(src)
+            # dest may be a stale copy packed inside the archive:
+            # overwriting it is an update of the same logical input.
+            shutil.copy2(src, dest)
+            self._log(f"[BVH融合] 已拷贝 {src.name} -> {dest}\n")
 
-        if kind == "inprocess":
-            code = self._run_inprocess(folder_path)
-        else:
-            prefix, env, _must_exist = self._resolve_runner()
-            self._log(f"[BVH融合] 执行: {' '.join(prefix)} {folder_path} --verbose\n")
-            proc = subprocess.Popen(
-                prefix + [str(folder_path), "--verbose"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env=env,
-            )
-            for raw in proc.stdout:
-                self._log(decode_output(raw))
-            code = proc.wait()
+            if kind == "inprocess":
+                code = self._run_inprocess(folder_path)
+            else:
+                prefix, env, _must_exist = self._resolve_runner()
+                self._log(f"[BVH融合] 执行: {' '.join(prefix)} {folder_path} --verbose\n")
+                proc = subprocess.Popen(
+                    prefix + [str(folder_path), "--verbose"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    env=env,
+                )
+                for raw in proc.stdout:
+                    self._log(decode_output(raw))
+                code = proc.wait()
 
-        self._log(f"[BVH融合] 退出码={code}\n")
-        if code != 0:
-            raise RuntimeError(f"mocap-merge 退出码={code}")
-        self._log("[BVH融合] 完成\n")
+            self._log(f"[BVH融合] 退出码={code}\n")
+            if code != 0:
+                raise RuntimeError(f"mocap-merge 退出码={code}")
+            produced = folder_path / f"{folder_path.name}_merge.bvh"
+            if not produced.is_file():
+                raise FileNotFoundError(f"融合成功但未找到产物: {produced}")
+            saved = archive.parent / produced.name
+            shutil.copy2(produced, saved)  # stale product from an earlier run: overwrite
+            self._log(f"[BVH融合] 产物已保存: {saved}\n")
+            self._log("[BVH融合] 完成\n")
