@@ -175,6 +175,66 @@ def test_read_loop_survives_recv_timeouts():
 
 
 
+def test_read_loop_detects_program_exit_message_and_ends_run():
+    # The program exits BY ITSELF (prints e.g. "udp_sniffer stopped"); a live
+    # interactive shell does NOT EOF afterwards. The runner must end the run
+    # on that marker or the UI stays stuck on "停止".
+    import threading
+
+    class LiveExitChannel:
+        def __init__(self):
+            self.sent = []
+            self._n = 0
+            self._evt = threading.Event()
+            self.closed = False
+
+        def recv(self, n):
+            self._n += 1
+            if self._n == 1:
+                return b"$ \n"                    # shell ready -> command sent
+            if self._n == 2:
+                return b"udp_sniffer stopped\n"   # program exits on its own
+            self._evt.wait(timeout=5)             # live shell: no EOF, ever
+            return b""
+
+        def send(self, data):
+            if isinstance(data, str):
+                data = data.encode()
+            self.sent.append(data)
+            return len(data)
+
+        def send_ready(self):
+            return True
+
+        def exit_status_ready(self):
+            return False
+
+        def close(self):
+            self.closed = True
+            self._evt.set()
+
+    class LiveSession(FakeSession):
+        def open_shell(self):
+            self.shell = LiveExitChannel()
+            return self.shell
+
+    ended = []
+    outputs = []
+    session = LiveSession()
+    runner = ProgramRunner(session, on_output=outputs.append,
+                           on_ended=lambda: ended.append(True))
+    runner.start()
+    _wait(runner)  # the reader thread can ONLY finish via the exit-marker path
+    assert runner.is_running is False
+    assert session.shell.closed is True
+    assert ended == [True]
+    assert RUN_COMMAND.encode() in session.shell.sent
+    joined = "".join(outputs)
+    assert "udp_sniffer stopped\n" in joined   # raw exit line is still logged
+    assert "检测到程序退出" in joined
+    assert joined.index("udp_sniffer stopped") < joined.index("检测到程序退出")
+
+
 def test_stop_resets_state_and_ends_session_for_live_shell():
     # A live interactive shell (what invoke_shell actually is) does NOT EOF when
     # the foreground process dies. stop() must still reset state + close the

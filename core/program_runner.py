@@ -5,6 +5,7 @@ import threading
 from core.ssh_session import strip_ansi
 
 RUN_COMMAND = "cd ~/ats && sudo ./sniffer --bin --nokov-wait\n"
+EXIT_MARKER = "udp_sniffer stopped"
 CTRL_C = b"\x03"
 
 
@@ -97,6 +98,7 @@ class ProgramRunner:
                 line_buf += text
                 lines = line_buf.splitlines(keepends=True)
                 line_buf = ""
+                exited = False
                 for line in lines:
                     if not line.endswith(("\n", "\r")):
                         line_buf = line
@@ -105,6 +107,8 @@ class ProgramRunner:
                         path = line.split(mocap_marker, 1)[1].strip()
                         if path:
                             self._on_mocap_dir(path)
+                    if EXIT_MARKER in line:
+                        exited = True
                 # send the run command once the shell is ready (first output)
                 if not self._command_sent:
                     self._command_sent = True
@@ -122,6 +126,16 @@ class ProgramRunner:
                         pass
                     self._sudo_sent = True
                 self._on_output(text)
+                if exited:
+                    # The program exited by itself. A live interactive shell
+                    # does NOT EOF afterwards, so end the run here — after
+                    # logging the raw output — or the UI stays stuck on "停止".
+                    self._on_output("[运行] 检测到程序退出\n")
+                    try:
+                        chan.close()
+                    except Exception:
+                        pass
+                    return
         finally:
             with self._lock:
                 self._running = False
