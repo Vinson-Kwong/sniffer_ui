@@ -73,3 +73,60 @@ def test_on_copy_data_uses_entry_value_then_fallback(monkeypatch):
         assert captured["local_parent"] == str(app_base_dir())
     finally:
         a.destroy()
+
+
+# ---- BVH输出路径栏 ----
+
+def test_bvh_output_entry_restored_from_config(monkeypatch):
+    a = appmod.App()
+    try:
+        monkeypatch.setattr(appmod, "load_config", lambda: {
+            "target_ip": "1.2.3.4", "port": 22, "username": "robot",
+            "password": "x", "run_command": "ls", "local_ip": "",
+            "bvh_output_dir": "D:/out", "last_bvh_out_dir": "D:/out",
+        })
+        a._load_config_into_ui()
+        assert a.bvh_output_entry.get() == "D:/out"
+        assert a._last_bvh_out_dir == "D:/out"
+    finally:
+        a.destroy()
+
+
+def test_persist_config_includes_bvh_output_keys(monkeypatch):
+    a = appmod.App()
+    try:
+        a.bvh_output_entry.delete(0, "end"); a.bvh_output_entry.insert(0, "D:/out")
+        a._last_bvh_out_dir = "D:/out"
+        saved = {}
+        monkeypatch.setattr(appmod, "save_config", lambda cfg: saved.update(cfg))
+        a._persist_config()
+        assert saved["bvh_output_dir"] == "D:/out"
+        assert saved["last_bvh_out_dir"] == "D:/out"
+    finally:
+        a.destroy()
+
+
+def test_on_merge_bvh_passes_output_dir_to_merger(monkeypatch, tmp_path):
+    a = appmod.App()
+    try:
+        archive = tmp_path / "data.tar.gz"; archive.write_bytes(b"")  # 存在且后缀合法
+        bvh = tmp_path / "take.bvh"; bvh.write_bytes(b"MOTION")
+        a.bvh_archive_entry.delete(0, "end"); a.bvh_archive_entry.insert(0, str(archive))
+        a.bvh_file_entry.delete(0, "end"); a.bvh_file_entry.insert(0, str(bvh))
+        captured = {}
+
+        def fake_merge(archive, bvh, on_done, output_dir=None):
+            captured["output_dir"] = output_dir
+
+        monkeypatch.setattr(a.merger, "merge", fake_merge)
+        a.bvh_output_entry.delete(0, "end")
+        a.bvh_output_entry.insert(0, "D:/out")
+        a.on_merge_bvh()
+        assert captured["output_dir"] == "D:/out"
+
+        a._merging = False
+        a.bvh_output_entry.delete(0, "end")  # 留空 -> None(默认压缩包所在目录)
+        a.on_merge_bvh()
+        assert captured["output_dir"] is None
+    finally:
+        a.destroy()

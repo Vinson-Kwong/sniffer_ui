@@ -41,6 +41,7 @@ class App(ctk.CTk):
         self._merging = False
         self._last_bvh_dir = ""
         self._last_copy_dir = ""
+        self._last_bvh_out_dir = ""
 
         self.session = SSHSession()
         self.controller = RobotController(
@@ -161,6 +162,12 @@ class App(ctk.CTk):
         ctk.CTkLabel(m2, text="BVH文件:").pack(side="left")
         self.bvh_file_entry = ctk.CTkEntry(m2, width=360); self.bvh_file_entry.pack(side="left", padx=8)
         ctk.CTkButton(m2, text="浏览", width=70, command=self.on_browse_bvh_file).pack(side="left")
+        m_out = ctk.CTkFrame(mergef, fg_color="transparent"); m_out.pack(fill="x", **pad)
+        ctk.CTkLabel(m_out, text="输出路径:").pack(side="left")
+        self.bvh_output_entry = ctk.CTkEntry(m_out, width=360,
+                                             placeholder_text="留空则保存到压缩包所在目录")
+        self.bvh_output_entry.pack(side="left", padx=8)
+        ctk.CTkButton(m_out, text="浏览", width=70, command=self.on_browse_bvh_output).pack(side="left")
         m3 = ctk.CTkFrame(mergef, fg_color="transparent"); m3.pack(fill="x", **pad)
         self.merge_btn = ctk.CTkButton(m3, text="融合", width=120, command=self.on_merge_bvh)
         self.merge_btn.pack(side="left")
@@ -215,6 +222,9 @@ class App(ctk.CTk):
         self.bvh_file_entry.delete(0, "end")
         self.bvh_file_entry.insert(0, cfg.get("bvh_file", ""))
         self._last_bvh_dir = cfg.get("last_bvh_dir", "")
+        self.bvh_output_entry.delete(0, "end")
+        self.bvh_output_entry.insert(0, cfg.get("bvh_output_dir", ""))
+        self._last_bvh_out_dir = cfg.get("last_bvh_out_dir", "")
         self._refresh_local_ips(initial=cfg.get("local_ip", ""))
 
     def _refresh_local_ips(self, initial=""):
@@ -290,6 +300,8 @@ class App(ctk.CTk):
                 "bvh_archive": self.bvh_archive_entry.get(),
                 "bvh_file": self.bvh_file_entry.get(),
                 "last_bvh_dir": self._last_bvh_dir,
+                "bvh_output_dir": self.bvh_output_entry.get(),
+                "last_bvh_out_dir": self._last_bvh_out_dir,
             })
         except Exception as e:
             self._log(f"[保存配置失败] {e}\n")
@@ -380,6 +392,13 @@ class App(ctk.CTk):
             self.bvh_file_entry.insert(0, path)
             self._last_bvh_dir = os.path.dirname(path)
 
+    def on_browse_bvh_output(self):
+        path = filedialog.askdirectory(initialdir=self._last_bvh_out_dir or None)
+        if path:
+            self.bvh_output_entry.delete(0, "end")
+            self.bvh_output_entry.insert(0, path)
+            self._last_bvh_out_dir = path
+
     def on_merge_bvh(self):
         archive = self.bvh_archive_entry.get().strip()
         bvh = self.bvh_file_entry.get().strip()
@@ -398,7 +417,8 @@ class App(ctk.CTk):
             self._merging = False
             self._refresh_controls()
 
-        self.merger.merge(archive, bvh, done)
+        output_dir = self.bvh_output_entry.get().strip()
+        self.merger.merge(archive, bvh, done, output_dir=output_dir or None)
 
     def on_connect(self):
         host = self.target_entry.get().strip()
