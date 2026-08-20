@@ -1,7 +1,7 @@
 """Local BVH merge: extract the selected tar.gz archive to a temp dir,
 copy the selected bvh in under its original name, run mocap-merge on the
-extracted folder, then move the resulting <folder>_merge.bvh next to the
-archive and clean up, streaming the tool's output.
+extracted folder, then move the resulting <folder>_merge.bvh to output_dir
+(default: next to the archive) and clean up, streaming the tool's output.
 
 Runner selection (AV false positives hit the packed exe):
 - dev with merge_app/src present: `python -m mocap_merge` subprocess
@@ -107,8 +107,8 @@ def decode_output(raw: bytes) -> str:
 class BvhMerger:
     """Extracts the tar.gz archive, copies the bvh in under its original
     name, runs mocap-merge on the extracted folder, copies the resulting
-    <folder>_merge.bvh next to the archive, and cleans up the temp dir —
-    streaming output through `log`."""
+    <folder>_merge.bvh to output_dir (default: next to the archive), and
+    cleans up the temp dir — streaming output through `log`."""
 
     def __init__(self, schedule, log, exe_path=None, source_dir=None,
                  allow_inprocess=True):
@@ -157,12 +157,12 @@ class BvhMerger:
             self._log(f"{type(e).__name__}: {e}\n")
             return 1
 
-    def merge(self, archive, bvh_path, on_done):
+    def merge(self, archive, bvh_path, on_done, output_dir=None):
         """Async entry point from the UI thread."""
 
         def work():
             try:
-                self._merge_sync(archive, bvh_path)
+                self._merge_sync(archive, bvh_path, output_dir=output_dir)
                 self._schedule(lambda: on_done(ok=True, error=None))
             except Exception as e:
                 msg = str(e)  # bind before the lambda (except target is cleared on exit)
@@ -170,7 +170,7 @@ class BvhMerger:
                 self._schedule(lambda: on_done(ok=False, error=msg))
         threading.Thread(target=work, daemon=True).start()
 
-    def _merge_sync(self, archive_path, bvh_path):
+    def _merge_sync(self, archive_path, bvh_path, output_dir=None):
         archive = Path(archive_path)
         if not archive.is_file():
             raise ValueError(f"压缩包不存在: {archive_path}")
@@ -219,7 +219,9 @@ class BvhMerger:
             produced = folder_path / f"{folder_path.name}_merge.bvh"
             if not produced.is_file():
                 raise FileNotFoundError(f"融合成功但未找到产物: {produced}")
-            saved = archive.parent / produced.name
+            dest_dir = Path(output_dir) if output_dir else archive.parent
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            saved = dest_dir / produced.name
             shutil.copy2(produced, saved)  # stale product from an earlier run: overwrite
             self._log(f"[BVH融合] 产物已保存: {saved}\n")
             self._log("[BVH融合] 完成\n")

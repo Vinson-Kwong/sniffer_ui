@@ -398,3 +398,46 @@ def test_merge_reports_failure_through_on_done(merger, tmp_path):
     ok, error = results[0]
     assert ok is False
     assert "压缩包不存在" in error
+
+
+# ---- output_dir (2026-08-20 spec) ----
+
+def test_merge_sync_without_output_dir_saves_next_to_archive(merger, tmp_path):
+    m, _logs = merger
+    src = _make_source(tmp_path)
+    archive = _make_archive(tmp_path, "data", {"x8.bin": b"x"})
+
+    m._merge_sync(str(archive), str(src))  # 不传 output_dir
+
+    assert (tmp_path / "data_merge.bvh").is_file()
+
+
+def test_merge_sync_output_dir_saves_product_there_and_creates_it(merger, tmp_path):
+    m, logs = merger
+    src = _make_source(tmp_path)
+    archive = _make_archive(tmp_path, "data", {"x8.bin": b"x"})
+    out = tmp_path / "results" / "merged"  # 尚不存在
+
+    m._merge_sync(str(archive), str(src), output_dir=str(out))
+
+    assert (out / "data_merge.bvh").is_file()
+    assert not (tmp_path / "data_merge.bvh").exists()  # 不再落在压缩包旁
+    assert any(str(out) in line for line in logs)
+
+
+def test_merge_passes_output_dir_through(merger, tmp_path):
+    m, _logs = merger
+    src = _make_source(tmp_path)
+    archive = _make_archive(tmp_path, "data", {"x8.bin": b"x"})
+    out = tmp_path / "out"
+    done = threading.Event()
+    results = []
+
+    def on_done(ok, error):
+        results.append((ok, error))
+        done.set()
+
+    m.merge(str(archive), str(src), on_done, output_dir=str(out))
+    assert done.wait(timeout=10)
+    assert results[0][0] is True
+    assert (out / "data_merge.bvh").is_file()
