@@ -25,6 +25,9 @@ def build_decompress_command(remote_archive_path: str):
     """Shell command to extract the archive into ~/ats/, or None if unsupported."""
     p = remote_archive_path.lower()
     dest = "~/ats/"
+    if remote_archive_path.startswith("~/"):
+        # "~" inside double quotes is NOT expanded by the shell; "$HOME" is.
+        remote_archive_path = "$HOME/" + remote_archive_path[2:]
     if p.endswith(".tar.gz") or p.endswith(".tgz"):
         return f'tar -xzf "{remote_archive_path}" -C {dest}'
     if p.endswith(".tar"):

@@ -43,11 +43,22 @@ def test_connect_sync_raises_on_connect_failure():
 
 
 def test_decompress_command_dispatch():
-    assert build_decompress_command("~/ats/a.tar.gz") == 'tar -xzf "~/ats/a.tar.gz" -C ~/ats/'
-    assert build_decompress_command("~/ats/a.TGZ") == 'tar -xzf "~/ats/a.TGZ" -C ~/ats/'
-    assert build_decompress_command("~/ats/a.tar") == 'tar -xf "~/ats/a.tar" -C ~/ats/'
-    assert build_decompress_command("~/ats/a.zip") == 'unzip -o "~/ats/a.zip" -d ~/ats/'
+    assert build_decompress_command("~/ats/a.tar.gz") == 'tar -xzf "$HOME/ats/a.tar.gz" -C ~/ats/'
+    assert build_decompress_command("~/ats/a.TGZ") == 'tar -xzf "$HOME/ats/a.TGZ" -C ~/ats/'
+    assert build_decompress_command("~/ats/a.tar") == 'tar -xf "$HOME/ats/a.tar" -C ~/ats/'
+    assert build_decompress_command("~/ats/a.zip") == 'unzip -o "$HOME/ats/a.zip" -d ~/ats/'
+    assert build_decompress_command("/abs/a.tar.gz") == 'tar -xzf "/abs/a.tar.gz" -C ~/ats/'
     assert build_decompress_command("~/ats/a.bin") is None
+
+
+def test_decompress_command_never_quotes_bare_tilde():
+    # A quoted "~" is NOT expanded by the shell (POSIX), so tar/unzip would look for a
+    # literal '~' file and fail with "Cannot open: No such file or directory".
+    # "$HOME" DOES expand inside double quotes, so that is what the command must use.
+    for path in ("~/ats/a.tar.gz", "~/ats/a.tgz", "~/ats/a.tar", "~/ats/a.zip"):
+        cmd = build_decompress_command(path)
+        assert '"~' not in cmd, cmd
+        assert '"$HOME/' in cmd, cmd
 
 
 def test_upload_sync_uploads_to_abs_home_and_decompresses(tmp_path):
