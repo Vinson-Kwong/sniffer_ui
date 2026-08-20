@@ -136,7 +136,7 @@ class App(ctk.CTk):
         copyf = ctk.CTkFrame(self); copyf.pack(fill="x", padx=12, pady=6)
         ctk.CTkLabel(copyf, text="数据拷贝删除", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
         copy_dir_row = ctk.CTkFrame(copyf, fg_color="transparent"); copy_dir_row.pack(fill="x", **pad)
-        ctk.CTkLabel(copy_dir_row, text="拷贝路径:").pack(side="left")
+        ctk.CTkLabel(copy_dir_row, text="拷贝输出路径:").pack(side="left")
         self.copy_dir_entry = ctk.CTkEntry(copy_dir_row, width=360,
                                            placeholder_text="留空则保存到程序所在目录")
         self.copy_dir_entry.pack(side="left", padx=8)
