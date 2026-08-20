@@ -8,7 +8,7 @@ import time
 import customtkinter as ctk
 from tkinter import filedialog
 
-from config_store import ensure_default_config_file, load_config, restore_defaults, save_config
+from config_store import app_base_dir, ensure_default_config_file, load_config, restore_defaults, save_config
 from core.net_info import list_local_ipv4
 from core.ssh_session import SSHSession
 from core.robot_controller import RobotController, binary_path_from_command
@@ -18,6 +18,12 @@ from ui.log_view import LogView
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+
+def resolve_copy_dest(raw: str) -> str:
+    """数据拷贝目标目录：输入非空用输入（去空白），留空回退到程序所在目录。"""
+    text = (raw or "").strip()
+    return text or str(app_base_dir())
 
 
 class App(ctk.CTk):
@@ -34,6 +40,7 @@ class App(ctk.CTk):
         self._copying_data = False
         self._merging = False
         self._last_bvh_dir = ""
+        self._last_copy_dir = ""
 
         self.session = SSHSession()
         self.controller = RobotController(
@@ -128,6 +135,12 @@ class App(ctk.CTk):
 
         copyf = ctk.CTkFrame(self); copyf.pack(fill="x", padx=12, pady=6)
         ctk.CTkLabel(copyf, text="数据拷贝删除", font=ctk.CTkFont(size=15, weight="bold")).pack(anchor="w", padx=8, pady=(6, 2))
+        copy_dir_row = ctk.CTkFrame(copyf, fg_color="transparent"); copy_dir_row.pack(fill="x", **pad)
+        ctk.CTkLabel(copy_dir_row, text="拷贝路径:").pack(side="left")
+        self.copy_dir_entry = ctk.CTkEntry(copy_dir_row, width=360,
+                                           placeholder_text="留空则保存到程序所在目录")
+        self.copy_dir_entry.pack(side="left", padx=8)
+        ctk.CTkButton(copy_dir_row, text="浏览", width=70, command=self.on_browse_copy_dir).pack(side="left")
         copy_row = ctk.CTkFrame(copyf, fg_color="transparent"); copy_row.pack(fill="x", **pad)
         self.copy_btn = ctk.CTkButton(copy_row, text="拷贝删除", width=120,
                                       command=self.on_copy_data)
@@ -194,6 +207,9 @@ class App(ctk.CTk):
         self.pw_entry.insert(0, cfg.get("password", "MangoTango"))
         self._last_dir = cfg.get("last_archive_dir", "")
         self.run_cmd_entry.insert(0, cfg.get("run_command", "cd ~/ats && sudo ./sniffer --bin"))
+        self.copy_dir_entry.delete(0, "end")
+        self.copy_dir_entry.insert(0, cfg.get("data_copy_dir", ""))
+        self._last_copy_dir = cfg.get("last_copy_dir", "")
         self.bvh_archive_entry.delete(0, "end")
         self.bvh_archive_entry.insert(0, cfg.get("bvh_archive", ""))
         self.bvh_file_entry.delete(0, "end")
@@ -269,6 +285,8 @@ class App(ctk.CTk):
                 "password": self.pw_entry.get(),
                 "last_archive_dir": self._last_dir,
                 "run_command": self.run_cmd_entry.get(),
+                "data_copy_dir": self.copy_dir_entry.get(),
+                "last_copy_dir": self._last_copy_dir,
                 "bvh_archive": self.bvh_archive_entry.get(),
                 "bvh_file": self.bvh_file_entry.get(),
                 "last_bvh_dir": self._last_bvh_dir,
@@ -334,6 +352,13 @@ class App(ctk.CTk):
             self.archive_entry.delete(0, "end")
             self.archive_entry.insert(0, path)
             self._last_dir = os.path.dirname(path)
+
+    def on_browse_copy_dir(self):
+        path = filedialog.askdirectory(initialdir=self._last_copy_dir or None)
+        if path:
+            self.copy_dir_entry.delete(0, "end")
+            self.copy_dir_entry.insert(0, path)
+            self._last_copy_dir = path
 
     def on_browse_bvh_archive(self):
         path = filedialog.askopenfilename(
@@ -419,6 +444,8 @@ class App(ctk.CTk):
             self._log("[数据拷贝] 请先连接目标\n"); return
         if not self._mocap_dir:
             self._log("[数据拷贝] 尚未获取 mocap 目录\n"); return
+        dest = resolve_copy_dest(self.copy_dir_entry.get())
+        self._log(f"[数据拷贝] 目标目录: {dest}\n")
         self._copying_data = True
         self.copy_progress.set(0)
         self.copy_progress_label.configure(text="0%")
@@ -434,7 +461,7 @@ class App(ctk.CTk):
             self._refresh_controls()
 
         self.controller.copy_mocap_data(
-            self._mocap_dir, str(Path.cwd()), done,
+            self._mocap_dir, dest, done,
             on_progress=self._set_copy_progress,
         )
 
