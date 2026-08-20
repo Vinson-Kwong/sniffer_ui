@@ -1,6 +1,5 @@
 """Main window: layout, worker-thread marshalling, button handlers."""
 import os
-from pathlib import Path
 import queue
 import threading
 import time
