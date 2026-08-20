@@ -16,25 +16,28 @@ DEFAULTS = {
     "bvh_archive": "",
     "bvh_file": "",
     "last_bvh_dir": "",
+    "data_copy_dir": "",
+    "last_copy_dir": "",
+    "bvh_output_dir": "",
+    "last_bvh_out_dir": "",
 }
+
+
+def app_base_dir() -> Path:
+    """App base dir: next to the frozen exe, else the project root."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
 
 
 def config_path() -> Path:
     """config.json lives next to the frozen exe, else next to this source file."""
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).resolve().parent
-    else:
-        base = Path(__file__).resolve().parent
-    return base / "config.json"
+    return app_base_dir() / "config.json"
 
 
 def default_config_path() -> Path:
     """default_config.json lives next to the exe/script (the 'factory defaults')."""
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).resolve().parent
-    else:
-        base = Path(__file__).resolve().parent
-    return base / "default_config.json"
+    return app_base_dir() / "default_config.json"
 
 
 def _bundled_default_path() -> Path:
