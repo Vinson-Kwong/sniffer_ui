@@ -1,10 +1,10 @@
-"""Long-lived interactive shell for `cd ~/ats && sudo ./sniffer --bin`; stop = Ctrl+C (\\x03)."""
+"""Long-lived interactive shell for `cd ~/ats && sudo ./sniffer --bin --nokov-wait`; stop = Ctrl+C (\\x03)."""
 import socket
 import threading
 
 from core.ssh_session import strip_ansi
 
-RUN_COMMAND = "cd ~/ats && sudo ./sniffer --bin\n"
+RUN_COMMAND = "cd ~/ats && sudo ./sniffer --bin --nokov-wait\n"
 CTRL_C = b"\x03"
 
 

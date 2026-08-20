@@ -12,7 +12,7 @@ DEFAULTS = {
     "username": "robot",
     "password": "MangoTango",
     "last_archive_dir": "",
-    "run_command": "cd ~/ats && sudo ./sniffer --bin",
+    "run_command": "cd ~/ats && sudo ./sniffer --bin --nokov-wait",
     "bvh_archive": "",
     "bvh_file": "",
     "last_bvh_dir": "",

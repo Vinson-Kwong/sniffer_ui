@@ -212,7 +212,7 @@ class App(ctk.CTk):
         self.user_entry.insert(0, cfg.get("username", "robot"))
         self.pw_entry.insert(0, cfg.get("password", "MangoTango"))
         self._last_dir = cfg.get("last_archive_dir", "")
-        self.run_cmd_entry.insert(0, cfg.get("run_command", "cd ~/ats && sudo ./sniffer --bin"))
+        self.run_cmd_entry.insert(0, cfg.get("run_command", "cd ~/ats && sudo ./sniffer --bin --nokov-wait"))
         self.copy_dir_entry.delete(0, "end")
         self.copy_dir_entry.insert(0, cfg.get("data_copy_dir", ""))
         self._last_copy_dir = cfg.get("last_copy_dir", "")

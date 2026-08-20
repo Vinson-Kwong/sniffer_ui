@@ -20,7 +20,7 @@ def test_load_returns_defaults_when_file_missing(tmp_path):
     assert cfg["username"] == "robot"
     assert cfg["password"] == "MangoTango"
     assert cfg["port"] == 22
-    assert cfg["run_command"] == "cd ~/ats && sudo ./sniffer --bin"
+    assert cfg["run_command"] == "cd ~/ats && sudo ./sniffer --bin --nokov-wait"
 
 
 def test_save_then_load_round_trips(tmp_path):
